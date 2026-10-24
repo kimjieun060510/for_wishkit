@@ -25,8 +25,9 @@ DESKTOP_UA = (
     "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
 )
 
-# 모바일 UA가 필요한 몰 (에이블리·무신사·지그재그 — webview_scraper.dart의 needsMobileUa() 이식).
-MOBILE_UA_HOSTS = ("a-bly.com", "musinsa.com", "zigzag.kr", "onelink.me")
+# 모바일 UA가 필요한 몰 (에이블리·무신사·지그재그). 공유용 짧은 링크(onelink.me)는 뺐다 — 휴대폰인 척하면
+# 앱/스토어로 보내려다 로딩이 안 끝난다. 짧은 링크는 렌더링 전에 share_links.py 가 실제 주소로 푼다.
+MOBILE_UA_HOSTS = ("a-bly.com", "musinsa.com", "zigzag.kr")
 MOBILE_UA = (
     "Mozilla/5.0 (Linux; Android 13; SM-G991N) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36"

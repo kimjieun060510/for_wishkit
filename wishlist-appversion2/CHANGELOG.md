@@ -1,5 +1,22 @@
 # 변경 이력 (CHANGELOG)
 
+## 2026-10-24 - 무신사 앱 공유 링크(짧은 링크)도 읽기
+
+🌟 **쉬운 설명**
+- 무신사 앱에서 공유하면 `musinsa.onelink.me/…` 같은 짧은 링크가 오는데, 서버가 이걸 그대로 열다가 시간이 다 돼서 못 읽었어요. 이제 짧은 링크를 먼저 실제 상품 주소로 바꾼 뒤 읽어요.
+- 저장되는 상품 링크도 짧은 링크가 아니라 실제 상품 주소(`musinsa.com/products/…`)예요.
+
+🔧 **기술 설명**
+- 원인(2026-10-24 로그): 엔진이 `https://musinsa.onelink.me/PvkC/…` 를 휴대폰 UA 로 열어 앱/스토어로 넘기려다 `Page.goto Timeout 20000ms`.
+- 엔진: 새 `share_links.py` — 짧은 링크(onelink.me·app.link·page.link·naver.me·link.coupang.com 등)는 렌더링 전에 HTTP 리다이렉트를 PC 브라우저인 척 따라가 실제 주소를 얻는다. 앱 주소(`intent://`, `musinsa://`)가 나오면 `af_web_dp`·`browser_fallback_url` 등에서 웹 주소를 꺼내고, JS 로 넘기는 중간 페이지면 본문에서 쇼핑몰 이름(`musinsa`)이 든 주소만 고른다(추측하지 않음). 못 풀면 원래 주소로 진행. 총 4초 이내.
+- `render.py`: `onelink.me` 를 모바일 UA 목록에서 뺐다.
+- 시간 예산: 엔진 페이지 로딩 대기 20초 → 12초(`RENDER_NAV_TIMEOUT_MS`, `engine.sh`). 전체 25초 안에 AI 시간을 남긴다.
+- GraphQL `ExtractedProduct.productUrl` 추가(엔진 `render.final_url`). 앱은 이 주소를 저장한다.
+- 테스트: `test_share_links.py`(14개, 실제 HTTP 302 체인 포함), `parsing_bridge_test.dart` 2개 추가.
+- ⚠️ 순서: 백엔드 배포(push) → `engine.sh deploy` → 앱 재설치. 앱을 먼저 깔면 서버에 아직 없는 `productUrl` 을 물어서 실패한다.
+
+---
+
 ## 2026-10-24 - 서버 함수 3개가 호출될 때마다 실패하던 문제
 
 🌟 **쉬운 설명**

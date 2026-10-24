@@ -176,6 +176,7 @@ task_def_json() {  # $1=이미지 주소:태그
     "secrets": [{"name": "GEMINI_API_KEY", "valueFrom": "${GEMINI_KEY_PARAM}"}],
     "environment": [
       {"name": "EXTRACT_TIMEOUT_S", "value": "25"},
+      {"name": "RENDER_NAV_TIMEOUT_MS", "value": "12000"},
       {"name": "IDENTIFY_TIMEOUT_S", "value": "25"}
     ],
     "healthCheck": {

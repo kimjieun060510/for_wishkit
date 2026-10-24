@@ -76,6 +76,10 @@ ParsedProductInfo productFromServerExtract({
   final krw = currency.isEmpty || currency.toUpperCase() == 'KRW';
   final usablePrice = krw ? price : 0; // 원화가 아니면 저장하지 않는다(앱은 원 단위만 다룸)
   final confidence = text('confidence');
+  // 엔진이 실제로 연 주소(공유용 짧은 링크 → musinsa.com/products/… 등). 없으면 요청한 주소를 그대로 쓴다.
+  final resolved = text('productUrl');
+  final productUrl =
+      Uri.tryParse(resolved)?.hasScheme == true && resolved.startsWith('http') ? resolved : url;
 
   final reason = failureReason ??
       (usablePrice <= 0 && ambiguous ? ExtractFailureReason.ambiguous : null);
@@ -83,9 +87,9 @@ ParsedProductInfo productFromServerExtract({
   return ParsedProductInfo(
     name: name.isEmpty ? '공유된 상품' : name,
     price: usablePrice,
-    platform: platformLabelForUrl(url),
+    platform: platformLabelForUrl(productUrl),
     image: image,
-    productUrl: url,
+    productUrl: productUrl,
     originalPrice: krw && regular > usablePrice && usablePrice > 0 ? regular : null,
     missingFields: [
       if (name.isEmpty) 'title',

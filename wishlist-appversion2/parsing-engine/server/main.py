@@ -32,6 +32,7 @@ from compare import grounding_check
 from metrics import PeakRSSSampler, now_ms
 from providers import ProviderResult, call_gemini, call_gemini_vision
 from render import launch_browser, render
+from share_links import resolve_share_link
 from tag_identify import (
     IdentifyError,
     PageView,
@@ -91,6 +92,8 @@ async def _extract(url: str) -> dict:
     """렌더링 실패/차단/AI 호출 실패는 HTTPException(502)으로 올린다.
     ambiguous:true는 정상 결과이지 에러가 아니다."""
     t_start = now_ms()
+    # 앱 공유용 짧은 링크(musinsa.onelink.me 등)는 실제 상품 주소로 먼저 바꾼다(share_links.py).
+    url = await asyncio.to_thread(resolve_share_link, url)
     cache_key = normalize_cache_key(url)
     cached = await app.state.cache.get(cache_key)
     if cached is not None:

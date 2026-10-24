@@ -88,6 +88,26 @@ void main() {
     expect(result.productUrl, '');
   });
 
+  test('공유용 짧은 링크는 엔진이 푼 실제 상품 주소로 저장한다', () async {
+    const short = 'https://musinsa.onelink.me/PvkC/cw1qxmxp';
+    const real = 'https://www.musinsa.com/products/4341120';
+    final gql = FakeExtractGql((_) => extracted(productUrl: real, name: '무신사 티셔츠'));
+
+    final result = await ParsingBridge(runner: gql).parseProductUrl('무신사 티셔츠 $short');
+
+    expect(gql.requestedUrls, [short]);
+    expect(result.productUrl, real);
+    expect(result.platform, '무신사');
+  });
+
+  test('엔진이 주소를 안 주면 요청한 주소를 그대로 쓴다', () async {
+    final gql = FakeExtractGql((_) => extracted(productUrl: null));
+
+    final result = await ParsingBridge(runner: gql).parseProductUrl(_url);
+
+    expect(result.productUrl, _url);
+  });
+
   group('서버 오류 → 화면 안내 이유', () {
     Future<String?> reasonFor(AwsDataException error) async {
       final gql = FakeExtractGql((_) => throw error);

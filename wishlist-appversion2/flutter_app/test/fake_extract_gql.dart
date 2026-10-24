@@ -30,6 +30,7 @@ class FakeExtractGql implements GqlRunner {
 
 /// 엔진 응답 한 건. 기본값은 "다 읽음".
 Map<String, dynamic> extracted({
+  String? productUrl,
   String? name = '상품',
   int? price = 10000,
   int? regular,
@@ -38,6 +39,7 @@ Map<String, dynamic> extracted({
   String? confidence = 'high',
   String? currency = 'KRW',
 }) => {
+  'productUrl': productUrl,
   'productName': name,
   'unconditionalPrice': price,
   'regularPrice': regular,

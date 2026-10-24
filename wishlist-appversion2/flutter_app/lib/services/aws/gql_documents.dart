@@ -234,7 +234,7 @@ mutation NotifyFollow(\$targetId: ID!) {
   static const extractProduct = '''
 query ExtractProduct(\$url: String!) {
   extractProduct(url: \$url) {
-    productName unconditionalPrice regularPrice currency imageUrl
+    productUrl productName unconditionalPrice regularPrice currency imageUrl
     ambiguous ambiguityReason confidence
   }
 }''';

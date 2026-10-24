@@ -9,6 +9,8 @@
 /** 엔진 서버(POST /extract)가 실제로 돌려주는 응답 모양. */
 export interface EngineExtractResponse {
   product_name: string | null;
+  /** 엔진이 실제로 렌더링한 페이지(공유용 짧은 링크를 푼 뒤의 주소). */
+  render?: { final_url?: string | null } | null;
   price: {
     unconditional_price: number | null;
     regular_price: number | null;
@@ -22,6 +24,7 @@ export interface EngineExtractResponse {
 
 /** 이 함수가 앱에 돌려주는 모양(GraphQL ExtractedProduct와 1:1로 맞춤). */
 export interface ExtractedProduct {
+  productUrl: string | null;
   productName: string | null;
   unconditionalPrice: number | null;
   regularPrice: number | null;
@@ -43,7 +46,9 @@ export function isValidHttpUrl(value: string): boolean {
 }
 
 export function toExtractedProduct(res: EngineExtractResponse): ExtractedProduct {
+  const finalUrl = res.render?.final_url;
   return {
+    productUrl: finalUrl && isValidHttpUrl(finalUrl) ? finalUrl : null,
     productName: res.product_name,
     unconditionalPrice: res.price?.unconditional_price ?? null,
     regularPrice: res.price?.regular_price ?? null,

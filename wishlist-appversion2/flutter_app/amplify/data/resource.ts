@@ -311,6 +311,8 @@ const schema = a.schema({
    * 필드 설명은 parsing-engine/server/main.py `_extract()` 참고.
    */
   ExtractedProduct: a.customType({
+    // 엔진이 실제로 연 상품 페이지 주소(공유용 짧은 링크를 푼 결과). 앱은 이 주소를 저장한다.
+    productUrl: a.string(),
     productName: a.string(),
     unconditionalPrice: a.integer(),
     regularPrice: a.integer(),
