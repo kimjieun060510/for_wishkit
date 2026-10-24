@@ -5,6 +5,7 @@ import * as origins from 'aws-cdk-lib/aws-cloudfront-origins';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import { auth } from './auth/resource';
+import { engineEnv } from './engine-env';
 import { data } from './data/resource';
 import { parsingProxy } from './functions/parsing-proxy/resource';
 import { publicWishlist } from './functions/public-wishlist/resource';
@@ -81,13 +82,13 @@ grantTables(backend.socialActions, [
 // 부르면 "엔진 서버 주소가 설정되지 않았습니다" 오류를 돌려준다(태그 사진·URL 추출만 안 됨).
 //   ENGINE_DISABLED=1 npx ampx sandbox --outputs-format dart --outputs-out-dir lib
 // 기본값(안 켬)은 위 네 값이 없으면 그대로 배포 실패 — 실수로 엔진 없이 공용 환경에 배포되지 않게.
-if (process.env.ENGINE_DISABLED === '1') {
+if (engineEnv('ENGINE_DISABLED') === '1') {
   console.warn('[backend.ts] ENGINE_DISABLED=1 — parsing-proxy를 엔진 없이 배포합니다(VPC 연결 생략).');
 } else {
-  const vpcId = process.env.ENGINE_VPC_ID;
-  const subnetIds = process.env.ENGINE_PRIVATE_SUBNET_IDS?.split(',').map((s) => s.trim()).filter(Boolean);
-  const lambdaSgId = process.env.ENGINE_LAMBDA_SG_ID;
-  const engineBaseUrl = process.env.ENGINE_BASE_URL;
+  const vpcId = engineEnv('ENGINE_VPC_ID');
+  const subnetIds = engineEnv('ENGINE_PRIVATE_SUBNET_IDS')?.split(',').map((s) => s.trim()).filter(Boolean);
+  const lambdaSgId = engineEnv('ENGINE_LAMBDA_SG_ID');
+  const engineBaseUrl = engineEnv('ENGINE_BASE_URL');
 
   if (!vpcId || !subnetIds?.length || !lambdaSgId || !engineBaseUrl) {
     throw new Error(

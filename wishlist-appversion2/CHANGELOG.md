@@ -1,5 +1,19 @@
 # 변경 이력 (CHANGELOG)
 
+## 2026-10-23 - 공용 백엔드 자동 배포 · 엔진 켜고 끄기
+
+🌟 **쉬운 설명**
+- GitHub `main`에 올리면 백엔드가 자동으로 배포돼요(Amplify 콘솔 연결 필요). 팀원은 각자 sandbox를 안 켜도 돼요.
+- 엔진 서버는 `parsing-engine/deploy/engine.sh`로 시연·테스트할 때만 켜고 끌 수 있어요. 켜져 있는 동안만 요금이 나가요.
+
+🔧 **기술 설명**
+- 레포 맨 위 `amplify.yml`: 백엔드 전용 Amplify 앱(모노레포, appRoot `wishlist-appversion2/flutter_app`). `npm ci` 대신 `npm install` — `@aws-amplify/data-construct`의 묶음 패키지 때문에 잠금 파일을 새로 만들어도 `npm ci`가 실패한다(npm 10·11 공통).
+- `package-lock.json` 갱신(`package.json`과 맞춤).
+- Amplify 콘솔 환경 변수가 `ampx pipeline-deploy` 안의 backend.ts 까지 전달되지 않는 문제(배포 2번 로그로 확인) → `amplify.yml`이 `ENGINE_*` 값을 `amplify/.engine.env`(gitignore)로 옮겨 적고, 새 `amplify/engine-env.ts`가 `process.env` → 그 파일 순으로 읽는다.
+- `engine.sh`: 기본 VPC 퍼블릭 서브넷 + 퍼블릭 IP(NAT·로드밸런서 없음), 들어오는 연결은 parsing-proxy Lambda 보안그룹의 8000번만. 주소는 Cloud Map `engine.wishkit.local`이라 껐다 켜도 백엔드 설정이 그대로. Gemini 키는 SSM SecureString. macOS 기본 bash(3.2)에서 동작 확인.
+
+---
+
 ## 2026-10-23 - 살까말까를 링크로 SNS에 공유
 
 🌟 **쉬운 설명**
