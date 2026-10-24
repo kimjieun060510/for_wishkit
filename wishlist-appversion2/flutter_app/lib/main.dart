@@ -134,7 +134,7 @@ class _WishlistAppState extends State<WishlistApp> {
 
     _lastHandledShareUrl = url;
     _lastHandledShareAt = now;
-    widget.store.setPendingShareUrl(input);
+    widget.store.setPendingShareUrl(ShareInput.normalize(input));
     router.go('/share');
   }
 

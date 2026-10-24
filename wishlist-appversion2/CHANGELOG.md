@@ -1,5 +1,19 @@
 # 변경 이력 (CHANGELOG)
 
+## 2026-10-24 - 공유한 상품 URL 이 여러 번 들어가던 문제
+
+🌟 **쉬운 설명**
+- 아이폰에서 쇼핑몰 상품을 우리 앱으로 공유하면 입력칸에 같은 주소가 3~4번 들어가고, 주소가 띄어쓰기 없이 붙어 들어오면 상품을 못 읽던 문제를 고쳤어요.
+- 이제 같은 주소는 한 번만 들어가고, 저장할 때도 첫 주소 하나만 상품 URL 로 저장돼요.
+
+🔧 **기술 설명**
+- 원인: iOS 공유 시트가 한 번에 같은 URL 을 공유 글·URL 첨부·텍스트 첨부로 넘기고, `AppDelegate`가 첨부 경로를 한 번 더 붙였다. URL 이 붙어 들어오면 `ShareInput.firstUrl`이 `https://a/1https://a/1…` 전체를 주소 하나로 돌려줘서 읽기에 실패했다. 저장 시에는 읽은 주소가 없으면 입력칸 글 전체가 `productUrl`에 들어갔다.
+- `ShareInput.normalize()` 추가(줄·URL 중복 제거, 붙은 같은 URL 하나로; `?to=https://…` 같은 정상 주소는 자르지 않음). `main.dart`·`share_intake_screen.dart`에서 사용. 저장 시 `productUrl`은 입력칸의 첫 URL.
+- iOS: `ShareViewController.uniqueMessages`(같은 글·다른 글에 포함된 글 제외), `AppDelegate`는 공유 글에 이미 있는 URL 을 다시 붙이지 않음.
+- 테스트 6개 추가(`share_input_test.dart`).
+
+---
+
 ## 2026-10-23 - 공용 백엔드 자동 배포 · 엔진 켜고 끄기
 
 🌟 **쉬운 설명**

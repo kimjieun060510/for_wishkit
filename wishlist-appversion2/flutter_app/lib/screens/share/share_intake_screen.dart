@@ -9,6 +9,7 @@ import '../../data/app_store.dart';
 import '../../models/models.dart';
 import '../../services/aws/gql_runner.dart';
 import '../../services/parsing_bridge.dart';
+import '../../services/share_input.dart';
 import '../../services/webview_scraper.dart';
 import '../../theme/diary_theme.dart';
 import '../../widgets/diary_widgets.dart';
@@ -52,7 +53,7 @@ class _ShareIntakeScreenState extends State<ShareIntakeScreen> {
         .id;
     final initial = widget.sharedUrl ?? store.pendingShareUrl;
     if (initial != null) {
-      urlCtrl.text = initial;
+      urlCtrl.text = ShareInput.normalize(initial);
       WidgetsBinding.instance.addPostFrameCallback((_) => _parse());
     }
   }
@@ -266,8 +267,9 @@ class _ShareIntakeScreenState extends State<ShareIntakeScreen> {
       price: price,
       platform: parsed!.platform,
       image: parsed!.image,
+      // 페이지에서 주소를 못 얻었으면 입력칸의 첫 URL 만 쓴다(입력칸 글 전체를 넣지 않는다).
       productUrl: parsed!.productUrl.isEmpty
-          ? urlCtrl.text.trim()
+          ? (ShareInput.firstUrl(urlCtrl.text) ?? urlCtrl.text.trim())
           : parsed!.productUrl,
       originalPrice: parsed!.originalPrice,
       discount: parsed!.discount,
