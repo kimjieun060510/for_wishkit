@@ -46,8 +46,6 @@ dependencies:
   path_provider: ^2.1.5
   flutter_local_notifications: ^19.0.0
   image_picker: ^1.1.2
-  # 온디바이스 Tier 2.5: 안 보이는 WebView로 렌더링된 페이지에서 상품정보 추출
-  flutter_inappwebview: ^6.1.5
   amplify_flutter: ^2.15.0
   amplify_auth_cognito: ^2.15.1
   amplify_api: ^2.15.1
@@ -61,9 +59,6 @@ dependencies:
 
 dev_dependencies:
   flutter_test:
-    sdk: flutter
-  # Tier 2.5 WebView 추출을 실기기/에뮬레이터에서 검증하는 통합 테스트용
-  integration_test:
     sdk: flutter
 
   # The "flutter_lints" package below contains a set of recommended lints to

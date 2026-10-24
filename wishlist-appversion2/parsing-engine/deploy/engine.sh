@@ -20,6 +20,7 @@ set -euo pipefail
 REGION="${AWS_REGION:-ap-northeast-2}"
 NAME="wishkit-engine"
 CPU=2048          # 2 vCPU — REPORT_FARGATE_VALIDATION_2026-09-24.md 에서 검증한 크기
+# 앱 → AppSync → parsing-proxy → 엔진. AppSync 가 30초까지만 기다려서 엔진 쪽 한도를 25초로 둔다(태스크 환경변수).
 MEMORY=4096       # 4 GB
 PORT=8000
 NAMESPACE="wishkit.local"
@@ -154,6 +155,10 @@ task_def_json() {  # $1=이미지 주소:태그
     "essential": true,
     "portMappings": [{"containerPort": ${PORT}, "protocol": "tcp"}],
     "secrets": [{"name": "GEMINI_API_KEY", "valueFrom": "${GEMINI_KEY_PARAM}"}],
+    "environment": [
+      {"name": "EXTRACT_TIMEOUT_S", "value": "25"},
+      {"name": "IDENTIFY_TIMEOUT_S", "value": "25"}
+    ],
     "healthCheck": {
       "command": ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:${PORT}/healthz', timeout=3)\""],
       "interval": 30, "timeout": 5, "retries": 3, "startPeriod": 30

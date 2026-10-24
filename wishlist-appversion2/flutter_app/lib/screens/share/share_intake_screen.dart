@@ -10,7 +10,6 @@ import '../../models/models.dart';
 import '../../services/aws/gql_runner.dart';
 import '../../services/parsing_bridge.dart';
 import '../../services/share_input.dart';
-import '../../services/webview_scraper.dart';
 import '../../theme/diary_theme.dart';
 import '../../widgets/diary_widgets.dart';
 
@@ -214,7 +213,6 @@ class _ShareIntakeScreenState extends State<ShareIntakeScreen> {
             image: '',
             productUrl: '',
             missingFields: const ['price', 'image_url'],
-            resolvedTier: 3,
           );
         });
     }
@@ -274,9 +272,9 @@ class _ShareIntakeScreenState extends State<ShareIntakeScreen> {
       originalPrice: parsed!.originalPrice,
       discount: parsed!.discount,
       missingFields: [if (parsed!.image.isEmpty) 'image_url'],
-      resolvedTier: parsed!.price > 0 ? parsed!.resolvedTier : 3,
-      engineUsed: false,
-      onDeviceExtracted: parsed!.onDeviceExtracted,
+      engineUsed: parsed!.engineUsed,
+      purchasePriceStatus: parsed!.purchasePriceStatus,
+      priceConfidence: parsed!.priceConfidence,
       extractFailureReason: parsed!.extractFailureReason,
     );
 
@@ -335,18 +333,20 @@ class _ShareIntakeScreenState extends State<ShareIntakeScreen> {
 
   String _statusText(ParsedProductInfo info) {
     switch (info.extractFailureReason) {
-      case ExtractFailureReason.accessBlocked:
-        return '이 쇼핑몰은 자동으로 열리지 않아요. 이름과 가격을 직접 입력해 주세요.';
-      case ExtractFailureReason.loadingTimeout:
-      case ExtractFailureReason.scriptTimeout:
-      case ExtractFailureReason.networkError:
-        return '페이지를 다 읽지 못했어요. 이름과 가격을 직접 입력해 주세요.';
-      case ExtractFailureReason.unsupportedCurrency:
-        return '이 쇼핑몰 통화는 아직 저장하지 않아요. 원 가격을 직접 입력해 주세요.';
+      case ExtractFailureReason.notLoggedIn:
+        return '로그인하면 상품 정보를 자동으로 읽어요. 지금은 이름과 가격을 직접 입력해 주세요.';
+      case ExtractFailureReason.engineOff:
+        return '지금은 자동 읽기 서버가 꺼져 있어요. 이름과 가격을 직접 입력해 주세요.';
+      case ExtractFailureReason.timeout:
+        return '페이지를 읽는 데 시간이 너무 걸렸어요. 다시 시도하거나 직접 입력해 주세요.';
+      case ExtractFailureReason.network:
+        return '인터넷 연결을 확인해 주세요. 이름과 가격은 직접 입력할 수 있어요.';
+      case ExtractFailureReason.failed:
+        return '이 페이지는 자동으로 읽지 못했어요. 이름과 가격을 직접 입력해 주세요.';
+      case ExtractFailureReason.ambiguous:
+        return '가격이 여러 개라 확실하지 않아요. 가격을 직접 입력해 주세요.';
       default:
-        if (info.price > 0 && info.onDeviceExtracted) return '휴대폰에서 읽음';
-        if (info.needsManualPrice) return '가격을 직접 입력해 주세요';
-        return '휴대폰에서 읽음';
+        return info.needsManualPrice ? '가격을 직접 입력해 주세요' : 'AI로 읽음';
     }
   }
 

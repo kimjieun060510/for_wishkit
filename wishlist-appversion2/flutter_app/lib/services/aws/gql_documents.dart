@@ -230,6 +230,15 @@ mutation NotifyFollow(\$targetId: ID!) {
   notifyFollow(targetId: \$targetId)
 }''';
 
+  // ── AI 엔진: 상품 URL 읽기 (서버 함수 parsing-proxy → 엔진 /extract) ──
+  static const extractProduct = '''
+query ExtractProduct(\$url: String!) {
+  extractProduct(url: \$url) {
+    productName unconditionalPrice regularPrice currency imageUrl
+    ambiguous ambiguityReason confidence
+  }
+}''';
+
   // ── AI 엔진: 태그 사진으로 상품 찾기 (서버 함수 parsing-proxy) ──
   static const identifyProductTag = '''
 query IdentifyProductTag(\$imageBase64: String!, \$mimeType: String!) {
@@ -254,6 +263,6 @@ query IdentifyProductTag(\$imageBase64: String!, \$mimeType: String!) {
     listBasketComments, addBasketComment, editBasketComment,
     removeBasketComment,
     listNotifications, markNotificationRead, deleteNotification, notifyFollow,
-    identifyProductTag,
+    extractProduct, identifyProductTag,
   ];
 }

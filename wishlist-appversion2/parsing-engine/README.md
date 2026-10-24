@@ -12,6 +12,10 @@ Tier 1 전환까지 끝난 상태이며, 그 과정은 `REPORT_2026-09-19.md`·
 
 ## 배경 — 반드시 먼저 읽을 것
 
+**2026-10-24 갱신**: 앱의 WebView 추출기를 제거하고, 앱은 상품 URL 을 이 서버로만 읽는다(GraphQL
+`extractProduct` → `parsing-proxy` Lambda → `POST /extract`). AppSync 30초 한도 때문에 배포 시
+`EXTRACT_TIMEOUT_S=25`로 띄운다(`deploy/engine.sh`). 아래 문단은 그 전 상황 기록이다.
+
 이 폴더가 만들어진 시점(2026-09-19)에 `main` 브랜치의 `ENGINE_DEVELOPMENT_HANDOFF.md`는
 여전히 "Python 서버 폴백은 채택하지 않음, WebView 우선"이라고 적혀 있었다(마지막 갱신
 2026-08-21). 이 서버는 그 결정을 뒤집는 **2026-09-18 새 결정**("서버 AI 완전 의존" —

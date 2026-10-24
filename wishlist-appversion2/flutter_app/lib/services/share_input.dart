@@ -2,7 +2,7 @@
 ///
 /// Keep the complete text (not only the URL) so the product title that
 /// shopping apps commonly put before a shortened URL can fill in when
-/// WebView extraction does not return a name.
+/// server AI extraction does not return a name.
 class ShareInput {
   ShareInput._();
 
@@ -85,7 +85,7 @@ class ShareInput {
   /// Picks the first shared text containing a URL.
   ///
   /// The original text is returned so `상품명 + URL` can be used as a title
-  /// hint when WebView extraction does not return a name. File paths and
+  /// hint when server AI extraction does not return a name. File paths and
   /// image-only shares are ignored.
   static String? fromCandidates(Iterable<String?> candidates) {
     for (final candidate in candidates) {

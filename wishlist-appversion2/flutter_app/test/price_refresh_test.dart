@@ -4,7 +4,8 @@ import 'package:figmadesign/data/app_store.dart';
 import 'package:figmadesign/models/models.dart';
 import 'package:figmadesign/screens/product/product_detail_screen.dart';
 import 'package:figmadesign/services/parsing_bridge.dart';
-import 'package:figmadesign/services/webview_scraper.dart';
+
+import 'fake_extract_gql.dart';
 
 const _url = 'https://www.musinsa.com/products/4341120';
 
@@ -24,7 +25,7 @@ Product _product({int price = 100000, int? originalPrice, int? discount}) =>
     );
 
 Future<AppStore> _store(
-  OnDeviceExtract? Function() extract, {
+  Map<String, dynamic>? Function() extract, {
   DateTime Function()? clock,
   void Function()? onCall,
 }) async {
@@ -33,10 +34,10 @@ Future<AppStore> _store(
     backendConfigured: false,
     clock: clock,
     parsingBridge: ParsingBridge(
-      extract: (_) async {
+      runner: FakeExtractGql((_) {
         onCall?.call();
         return extract();
-      },
+      }),
     ),
   );
   await store.init();
@@ -48,13 +49,7 @@ void main() {
 
   test('확신 있는 새 가격이면 가격·정가·할인율만 바꾸고 메모는 그대로 둔다', () async {
     final store = await _store(
-      () => OnDeviceExtract(
-        name: '다른 이름',
-        price: 80000,
-        originalPrice: 100000,
-        priceConfidence: 'high',
-        finalUrl: _url,
-      ),
+      () => extracted(name: '다른 이름', price: 80000, regular: 100000),
     );
     store.products = [_product()];
 
@@ -75,7 +70,7 @@ void main() {
 
   test('할인이 끝나면 취소선 정가와 할인 배지도 지운다', () async {
     final store = await _store(
-      () => OnDeviceExtract(price: 100000, priceConfidence: 'medium'),
+      () => extracted(price: 100000, confidence: 'medium'),
     );
     store.products = [
       _product(price: 80000, originalPrice: 100000, discount: 20),
@@ -92,10 +87,7 @@ void main() {
 
   test('가격을 못 읽으면 기존 가격을 유지한다', () async {
     final store = await _store(
-      () => OnDeviceExtract(
-        name: '클래식 반소매 티셔츠',
-        failureReason: ExtractFailureReason.priceAmbiguous,
-      ),
+      () => extracted(name: '클래식 반소매 티셔츠', price: null, ambiguous: true),
     );
     store.products = [_product()];
 
@@ -108,7 +100,7 @@ void main() {
 
   test('확신이 낮은 가격은 바로 바꾸지 않고 확인을 요청한다', () async {
     final store = await _store(
-      () => OnDeviceExtract(price: 55000, priceConfidence: 'low'),
+      () => extracted(price: 55000, confidence: 'low'),
     );
     store.products = [_product()];
 
@@ -127,7 +119,7 @@ void main() {
     var now = DateTime(2026, 10, 22, 12);
     var calls = 0;
     final store = await _store(
-      () => OnDeviceExtract(price: 100000, priceConfidence: 'high'),
+      () => extracted(price: 100000),
       clock: () => now,
       onCall: () => calls++,
     );
@@ -153,7 +145,7 @@ void main() {
 
   test('바구니에 담긴 같은 상품도 새 가격으로 바뀐다', () async {
     final store = await _store(
-      () => OnDeviceExtract(price: 70000, priceConfidence: 'high'),
+      () => extracted(price: 70000),
     );
     store.products = [_product()];
     await store.addToBasket(store.products.first);

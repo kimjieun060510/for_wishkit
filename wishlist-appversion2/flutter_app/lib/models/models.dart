@@ -677,7 +677,7 @@ class BasketItem {
   }
 }
 
-/// WebView에서 읽은 상품 정보. 파이썬 서버 응답을 담지 않는다.
+/// 상품 URL 에서 읽은 정보(서버 AI 엔진 결과 — services/parsing_bridge.dart). 못 읽은 칸은 비어 있다.
 class ParsedProductInfo {
   ParsedProductInfo({
     required this.name,
@@ -688,16 +688,9 @@ class ParsedProductInfo {
     this.originalPrice,
     this.discount,
     this.missingFields = const [],
-    this.resolvedTier,
     this.engineUsed = false,
-    this.onDeviceExtracted = false,
     this.purchasePriceStatus = 'unknown',
     this.priceConfidence = 'unknown',
-    this.availability = 'unknown',
-    this.optionDependent,
-    this.optionPriceMin,
-    this.optionPriceMax,
-    this.priceEvidence = const [],
     this.extractFailureReason,
   });
 
@@ -709,17 +702,17 @@ class ParsedProductInfo {
   final int? originalPrice;
   final int? discount;
   final List<String> missingFields;
-  final int? resolvedTier;
 
-  /// 파이썬 서버를 호출했으면 true. 공유 담기는 항상 false.
+  /// 서버 AI 엔진이 응답했으면 true(값을 못 읽었어도). 요청 자체가 실패했으면 false.
   final bool engineUsed;
+
+  /// 'confirmed'(AI 가 확신한 판매가) | 'unknown'.
   final String purchasePriceStatus;
+
+  /// 'high' | 'medium' | 'low' | 'unknown'. 가격 새로고침은 high/medium 만 바로 반영한다.
   final String priceConfidence;
-  final String availability;
-  final bool? optionDependent;
-  final int? optionPriceMin;
-  final int? optionPriceMax;
-  final List<Map<String, dynamic>> priceEvidence;
+
+  /// 자동으로 못 읽은 이유([ExtractFailureReason] 값). 다 읽었으면 null.
   final String? extractFailureReason;
 
   bool get needsManualPrice => price <= 0;
@@ -727,100 +720,6 @@ class ParsedProductInfo {
   /// Canonical v2 aliases. 기존 UI의 price/originalPrice는 하위 호환용이다.
   int? get purchasePrice => price > 0 ? price : null;
   int? get regularPrice => originalPrice;
-
-  /// 단말 WebView(Tier 2.5)로 정보를 보완했는지. UI 배지 표시용.
-  final bool onDeviceExtracted;
-
-  /// 단말 WebView 추출 결과로 비어 있는 칸을 메운다.
-  /// [replacePrice]일 때는 화면에서 검증한 정가·판매가 쌍으로 교체한다.
-  ParsedProductInfo mergeOnDevice({
-    String? name,
-    int? price,
-    int? originalPrice,
-    String? image,
-    String? platform,
-    bool replacePrice = false,
-    String? purchasePriceStatus,
-    String? priceConfidence,
-    String? availability,
-    bool? optionDependent,
-    int? optionPriceMin,
-    int? optionPriceMax,
-    List<Map<String, dynamic>>? priceEvidence,
-  }) {
-    final hasDevicePrice = price != null && price > 0;
-    final filledPrice = hasDevicePrice && (replacePrice || this.price <= 0)
-        ? price
-        : this.price;
-    final candidateOriginal = hasDevicePrice && replacePrice
-        ? originalPrice
-        : (this.originalPrice ?? originalPrice);
-    final filledOriginal =
-        candidateOriginal != null && candidateOriginal > filledPrice
-        ? candidateOriginal
-        : null;
-    final filledDiscount = filledOriginal != null && filledPrice > 0
-        ? ((filledOriginal - filledPrice) / filledOriginal * 100).round()
-        : null;
-    final filledName =
-        (this.name.isEmpty || this.name == '공유된 상품') &&
-            name != null &&
-            name.isNotEmpty
-        ? name
-        : this.name;
-    final filledImage = this.image.isEmpty && image != null && image.isNotEmpty
-        ? image
-        : this.image;
-    final filledPlatform =
-        (this.platform.isEmpty || this.platform == '쇼핑몰') &&
-            platform != null &&
-            platform.isNotEmpty
-        ? platform
-        : this.platform;
-
-    final remaining = missingFields.where((f) {
-      if (f == 'price') return filledPrice <= 0;
-      if (f == 'title') return filledName.isEmpty;
-      if (f == 'image_url') return filledImage.isEmpty;
-      return true;
-    }).toList();
-
-    return ParsedProductInfo(
-      name: filledName,
-      price: filledPrice,
-      platform: filledPlatform,
-      image: filledImage,
-      productUrl: productUrl,
-      originalPrice: filledOriginal,
-      discount: filledDiscount,
-      missingFields: remaining,
-      resolvedTier: resolvedTier,
-      engineUsed: engineUsed,
-      onDeviceExtracted: true,
-      purchasePriceStatus: hasDevicePrice
-          ? (purchasePriceStatus ?? 'provisional')
-          : this.purchasePriceStatus,
-      priceConfidence: hasDevicePrice
-          ? (priceConfidence ?? 'low')
-          : this.priceConfidence,
-      availability: availability ?? this.availability,
-      optionDependent: optionDependent ?? this.optionDependent,
-      optionPriceMin: optionPriceMin ?? this.optionPriceMin,
-      optionPriceMax: optionPriceMax ?? this.optionPriceMax,
-      priceEvidence: hasDevicePrice
-          ? (priceEvidence ??
-                const [
-                  {
-                    'price_role': 'purchase_price',
-                    'source': 'rendered-webview',
-                    'adapter': null,
-                    'field': null,
-                  },
-                ])
-          : this.priceEvidence,
-      extractFailureReason: extractFailureReason,
-    );
-  }
 }
 
 /// 태그 사진으로 상품을 찾은 결과 (서버 identifyProductTag).

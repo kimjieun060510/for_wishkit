@@ -1,5 +1,21 @@
 # 변경 이력 (CHANGELOG)
 
+## 2026-10-24 - 상품 읽기를 서버 AI 로 일원화 (WebView 추출기 제거)
+
+🌟 **쉬운 설명**
+- 상품 링크를 넣으면 이제 휴대폰이 아니라 **서버의 AI**가 페이지를 읽어서 이름·가격·사진을 채워요(9월 18일 결정을 앱까지 반영).
+- 서버 엔진이 꺼져 있으면 자동으로 안 채워지고, "자동 읽기 서버가 꺼져 있어요" 안내와 함께 직접 입력하면 돼요.
+- 로그인해야 자동 읽기가 돼요. 가격 새로고침도 같은 방식이에요.
+
+🔧 **기술 설명**
+- 앱: `ParsingBridge`가 GraphQL `extractProduct`를 부른다(새 `Gql.extractProduct`). 응답→모델 변환과 오류 해석은 새 `lib/services/server_extract.dart`(순수 Dart). 실패해도 예외 대신 URL·공유 제목을 남기고 `ExtractFailureReason`(not_logged_in/engine_off/timeout/network/failed/ambiguous)으로 화면 문구를 고른다.
+- 제거: `webview_scraper.dart`, `webview_extract_host.dart`(앱 전체에 깔린 숨은 WebView), `product_extract_js.dart`, `live_field_compare.dart`, `flutter_inappwebview`·`integration_test` 의존성, WebView 단위·통합 테스트, `tools/`(WebView 대조용 파이썬 스크립트). `ParsedProductInfo`에서 WebView 전용 필드(`onDeviceExtracted`, `mergeOnDevice`, 옵션·근거·Tier 필드) 정리.
+- 서버: `parsing-proxy`가 오류를 코드로 돌려준다(`ENGINE_NOT_CONFIGURED`·`ENGINE_UNAVAILABLE`·`ENGINE_TIMEOUT`·`ENGINE_ERROR`·`INVALID_INPUT`, 자세한 원인은 CloudWatch). AppSync 30초 한도에 맞춰 엔진 요청 27초·Lambda 30초, 엔진 태스크는 `EXTRACT_TIMEOUT_S=25`(`engine.sh`). 원래 /extract 는 55초를 기다려서 AppSync 에서 먼저 끊겼다.
+- 테스트: `parsing_bridge_test.dart`(9개)·`price_refresh_test.dart`를 서버 응답 기준으로 다시 씀(`test/fake_extract_gql.dart`).
+- 기록 문서(`ENGINE_DEVELOPMENT_HANDOFF.md`, `MALL_SUPPORT.md`) 맨 위에 WebView 제거 안내를 달았다. 내용은 기록으로 남김.
+
+---
+
 ## 2026-10-24 - 공유한 상품 URL 이 여러 번 들어가던 문제
 
 🌟 **쉬운 설명**
