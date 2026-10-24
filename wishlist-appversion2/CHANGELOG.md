@@ -25,7 +25,7 @@
 🔧 **기술 설명**
 - ⚠️ **백엔드를 먼저 배포해야 링크가 해외에서 열립니다.** 앱만 먼저 나가면 옛 배달망 주소로 링크가 만들어져 지금처럼 한국에서만 열려요(오류는 없음).
 - `backend.ts`: 공유 페이지 전용 CloudFront 배달망 `SharePagesCdn` 추가 — 나라 제한 없음, `originPath: /share-pages`로 그 폴더만 연결. 기존 `FilesCdn`(한국 전용)과 캐시 정책은 그대로 같이 씀. `amplify_outputs`의 `custom.sharePagesBaseUrl`로 주소 전달.
-- `share_plus: ^11.0.0` 추가 → `flutter pub get` 필요(pubspec.lock 미갱신). 12.x 이상은 AGP 8.12.1·Gradle 8.13·Kotlin 2.2.0이 필요해서 11.x로 둠(지금 AGP 8.10.1·Gradle 8.12·Kotlin 2.1.0).
+- `share_plus: ^13.3.1` 추가 → `flutter pub get` 필요. 11.x는 다른 패키지와 충돌해서 설치가 안 됐다. 13.x에 맞춰 Android 빌드 도구를 올림: AGP 8.10.1→8.12.1, Gradle 8.12→8.13, Kotlin 2.1.0→2.2.0.
 - 새 파일 `lib/screens/share/share_link.dart`(공유 방법 선택창·공유창 띄우기, 공유창 실패 시 링크 복사). 쓰이지 않던 `copy_public_share_link.dart`와 가짜 주소를 만들던 `AppStore.shareUrlFor`는 삭제.
 - `AppStore.publishSelectedBasketLink()` 추가. 로그인 확인을 먼저 해서, 실패했을 때 "보낸 살까말까"에 빈 기록이 남지 않게 함. `publishSharePage()`는 화면이 옛 basket을 넘겨도 최신 값(같은 공유 주소)을 쓰도록 수정.
 - `AwsFileStore.sharePageUrlFor()`: 공유 페이지만 공유 전용 배달망 주소로 만든다. 테스트 2개 추가(`file_store_test.dart`).
