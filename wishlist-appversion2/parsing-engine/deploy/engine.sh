@@ -35,11 +35,30 @@ none_to_empty() { [ "$1" = "None" ] && echo "" || echo "$1"; }
 account_id() { aws sts get-caller-identity --query Account --output text; }
 ecr_uri() { echo "$(account_id).dkr.ecr.${REGION}.amazonaws.com/${NAME}"; }
 
+die() { echo "❌ $*" >&2; exit 1; }
+
+# 필요한 프로그램·AWS 로그인이 있는지 맨 먼저 확인한다(없으면 중간에 엉뚱한 오류로 멈추지 않게).
+preflight() {
+  command -v aws >/dev/null 2>&1 ||
+    die "AWS CLI 가 없어요. 설치: curl https://awscli.amazonaws.com/AWSCLIV2.pkg -o /tmp/AWSCLIV2.pkg && sudo installer -pkg /tmp/AWSCLIV2.pkg -target /"
+  local who
+  who=$(aws sts get-caller-identity --query Arn --output text 2>&1) ||
+    die "AWS 로그인 정보가 없거나 잘못됐어요(aws configure 확인): $who"
+  echo "▶ AWS 계정: $who" >&2
+  if [ "${1:-}" = deploy ]; then
+    command -v docker >/dev/null 2>&1 ||
+      die "Docker 가 없어요. Docker Desktop 을 설치·실행하고, 그래도 안 되면 PATH 에 /Applications/Docker.app/Contents/Resources/bin 추가"
+    docker info >/dev/null 2>&1 || die "Docker Desktop 이 꺼져 있어요. 앱을 켜고 고래 아이콘이 멈춘 뒤 다시 실행해 주세요."
+  fi
+}
+
 default_vpc() {
   local vpc
-  vpc=$(none_to_empty "$(aws_ ec2 describe-vpcs --filters Name=isDefault,Values=true \
-    --query 'Vpcs[0].VpcId' --output text)")
-  [ -n "$vpc" ] || { echo "기본 VPC 가 없어요. VPC 콘솔에서 '기본 VPC 생성'을 먼저 해 주세요." >&2; exit 1; }
+  # 권한 오류 등은 그 내용을 그대로 보여 준다("VPC 가 없다"로 잘못 안내하지 않게).
+  vpc=$(aws_ ec2 describe-vpcs --filters Name=isDefault,Values=true \
+    --query 'Vpcs[0].VpcId' --output text 2>&1) || die "VPC 조회 실패: $vpc"
+  vpc=$(none_to_empty "$vpc")
+  [ -n "$vpc" ] || die "기본 VPC 가 없어요. VPC 콘솔에서 '기본 VPC 생성'을 먼저 해 주세요."
   echo "$vpc"
 }
 
@@ -268,6 +287,10 @@ cmd_destroy() {
   done
   log "정리 끝."
 }
+
+case "${1:-}" in
+  setup | deploy | start | stop | status | env | destroy) preflight "$1" ;;
+esac
 
 case "${1:-}" in
   setup) cmd_setup ;;

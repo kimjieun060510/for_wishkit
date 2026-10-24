@@ -1,5 +1,18 @@
 # 변경 이력 (CHANGELOG)
 
+## 2026-10-24 - 서버 함수 3개가 호출될 때마다 실패하던 문제
+
+🌟 **쉬운 설명**
+- 서버 AI 상품 읽기, 태그 사진 찾기, 친구에게 살까말까 보내기·댓글·팔로우 알림, 공개 위시리스트 보기가 서버에서 바로 실패하고 있었어요. 고쳤어요.
+- 앱은 바꾸지 않아도 돼요(백엔드만 다시 배포).
+
+🔧 **기술 설명**
+- 원인: Amplify Gen 2 의 `a.handler.function()` 은 Lambda 에 `{ typeName, fieldName, arguments, identity, … }` 를 넘기는데(@aws-amplify/graphql-function-transformer), 세 함수 모두 AppSync 직접 리졸버 모양인 `event.info.fieldName` 을 읽어서 `Cannot read properties of undefined (reading 'fieldName')` 로 실패했다(2026-10-24 CloudWatch 로그).
+- `functions/shared/appsync-event.ts`(`AmplifyFunctionEvent`, `fieldNameOf`) 추가. parsing-proxy·social-actions·public-wishlist 핸들러가 이걸 쓴다. `info` 모양도 받아 둠.
+- `engine.sh`: 시작할 때 AWS CLI·로그인·(deploy 면) Docker 를 먼저 확인하고, 권한 오류는 원문 그대로 보여 준다(전에는 "기본 VPC 가 없어요"로 잘못 안내).
+
+---
+
 ## 2026-10-24 - 상품 읽기를 서버 AI 로 일원화 (WebView 추출기 제거)
 
 🌟 **쉬운 설명**

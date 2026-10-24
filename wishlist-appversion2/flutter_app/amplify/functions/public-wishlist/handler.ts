@@ -1,4 +1,4 @@
-import type { AppSyncResolverHandler } from 'aws-lambda';
+import { type AmplifyFunctionEvent, fieldNameOf } from '../shared/appsync-event';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import { queryAll } from '../shared/ddb';
@@ -24,8 +24,9 @@ const queryPublic: QueryPublic = (table, ownerId) =>
 
 type Args = { ownerId?: string; ownerIds?: string[] };
 
-export const handler: AppSyncResolverHandler<Args, unknown> = async (event) => {
-  switch (event.info.fieldName) {
+export const handler = async (event: AmplifyFunctionEvent<Args>): Promise<unknown> => {
+  const fieldName = fieldNameOf(event);
+  switch (fieldName) {
     case 'publicWishlist': {
       const ownerId = event.arguments.ownerId;
       if (!ownerId) throw new Error('ownerId is required');
@@ -34,6 +35,6 @@ export const handler: AppSyncResolverHandler<Args, unknown> = async (event) => {
     case 'publicWishlistCounts':
       return loadCounts(queryPublic, event.arguments.ownerIds ?? []);
     default:
-      throw new Error(`Unknown field: ${event.info.fieldName}`);
+      throw new Error(`Unknown field: ${fieldName}`);
   }
 };

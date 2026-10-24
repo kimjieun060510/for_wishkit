@@ -1,4 +1,4 @@
-import type { AppSyncResolverHandler } from 'aws-lambda';
+import { type AmplifyFunctionEvent, fieldNameOf } from '../shared/appsync-event';
 import {
   isValidHttpUrl,
   isValidImageInput,
@@ -36,11 +36,14 @@ type Args =
   | { url: string }
   | { imageBase64: string; mimeType: string };
 
-export const handler: AppSyncResolverHandler<Args, ExtractedProduct | IdentifiedTag> = async (event) => {
+export const handler = async (
+  event: AmplifyFunctionEvent<Args>,
+): Promise<ExtractedProduct | IdentifiedTag> => {
+  const fieldName = fieldNameOf(event);
   if (!ENGINE_BASE_URL) {
     throw new Error(ErrorCode.notConfigured);
   }
-  switch (event.info.fieldName) {
+  switch (fieldName) {
     case 'identifyProductTag': {
       const { imageBase64, mimeType } = event.arguments as { imageBase64: string; mimeType: string };
       if (!isValidImageInput(imageBase64, mimeType)) {
@@ -63,7 +66,7 @@ export const handler: AppSyncResolverHandler<Args, ExtractedProduct | Identified
     default:
       // 원래는 모르는 필드도 /extract로 흘러갔다 — 스키마에 필드를 추가하고 여기를 빠뜨리면
       // 엉뚱한 호출 대신 바로 알아챌 수 있게 막는다.
-      throw new Error(`Unknown field: ${event.info.fieldName}`);
+      throw new Error(`Unknown field: ${fieldName}`);
   }
 };
 
