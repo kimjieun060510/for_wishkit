@@ -43,7 +43,8 @@ def main() -> int:
     ap.add_argument("--out", type=Path, default=Path("tag_identify_result.json"))
     args = ap.parse_args()
 
-    rows = list(csv.DictReader((args.photos / "answers.csv").open(encoding="utf-8")))
+    with (args.photos / "answers.csv").open(encoding="utf-8") as f:
+        rows = list(csv.DictReader(f))
     results, counts = [], {"정답": 0, "다른 사이트": 0, "못 찾음": 0, "품번 오독": 0, "오류": 0}
     for row in rows:
         path = args.photos / row["file"]
@@ -83,6 +84,9 @@ def main() -> int:
         results.append({"file": row["file"], "verdict": verdict, "elapsed_s": round(elapsed, 1), "response": body})
         print(f"[{verdict}] {row['file']:30s} {elapsed:5.1f}s  품번={read_code or '-':16s} {match.get('url', '')}")
 
+    if not rows:
+        print("answers.csv에 사진이 없습니다.")
+        return 1
     print("\n" + "  ".join(f"{k} {v}" for k, v in counts.items()) + f"  (총 {len(rows)}장)")
     args.out.write_text(json.dumps(results, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"자세한 결과: {args.out}")

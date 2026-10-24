@@ -75,7 +75,15 @@ grantTables(backend.socialActions, [
 //                               (엔진 태스크의 보안그룹이 "이 SG에서 8000번 포트 허용"
 //                               규칙을 갖고 있어야 함 — 반대 방향 아님)
 //    ENGINE_BASE_URL            엔진 서버 내부 주소(예: 내부 ALB의 http://<DNS>)
-{
+//
+// 엔진 서버 없이 개인 sandbox를 띄우고 싶으면(로그인·데이터·광고·가격 새로고침 테스트용)
+// ENGINE_DISABLED=1 을 명시적으로 켠다. 그러면 VPC 연결을 건너뛰고, parsing-proxy는 배포되지만
+// 부르면 "엔진 서버 주소가 설정되지 않았습니다" 오류를 돌려준다(태그 사진·URL 추출만 안 됨).
+//   ENGINE_DISABLED=1 npx ampx sandbox --outputs-format dart --outputs-out-dir lib
+// 기본값(안 켬)은 위 네 값이 없으면 그대로 배포 실패 — 실수로 엔진 없이 공용 환경에 배포되지 않게.
+if (process.env.ENGINE_DISABLED === '1') {
+  console.warn('[backend.ts] ENGINE_DISABLED=1 — parsing-proxy를 엔진 없이 배포합니다(VPC 연결 생략).');
+} else {
   const vpcId = process.env.ENGINE_VPC_ID;
   const subnetIds = process.env.ENGINE_PRIVATE_SUBNET_IDS?.split(',').map((s) => s.trim()).filter(Boolean);
   const lambdaSgId = process.env.ENGINE_LAMBDA_SG_ID;
@@ -134,7 +142,7 @@ cfnUserPoolClient.tokenValidityUnits = {
 };
 
 // ─────────────────────────────────────────────────────────────
-// 4단계: 파일 배달망(CloudFront) + 공유 페이지 28일 자동 삭제
+// 4단계: 파일 배달망(CloudFront) 두 개 + 공유 페이지 28일 자동 삭제
 // ─────────────────────────────────────────────────────────────
 {
   const bucket = backend.storage.resources.bucket;
@@ -143,27 +151,41 @@ cfnUserPoolClient.tokenValidityUnits = {
 
   // S3 는 공개하지 않고, CloudFront 만 읽을 수 있게 한다 (Origin Access Control).
   // 앱에 저장되는 사진 주소는 https://<배달망 주소>/avatars/... 형태의 영구 주소가 된다.
+  const cachePolicy = new cloudfront.CachePolicy(stack, 'FilesCachePolicy', {
+    comment: 'wishkit files: 5분 기본, 파일 이름이 매번 달라서 오래 캐시해도 안전',
+    defaultTtl: Duration.minutes(5),
+    minTtl: Duration.seconds(0),
+    maxTtl: Duration.days(7),
+    enableAcceptEncodingGzip: true,
+    enableAcceptEncodingBrotli: true,
+  });
+  const behavior = (origin: cloudfront.IOrigin): cloudfront.BehaviorOptions => ({
+    origin,
+    viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+    allowedMethods: cloudfront.AllowedMethods.ALLOW_GET_HEAD,
+    cachePolicy,
+    responseHeadersPolicy: cloudfront.ResponseHeadersPolicy.SECURITY_HEADERS,
+  });
+
+  // ① 앱용 배달망: 프로필 사진·태그 사진 등. 한국에서만 열린다(해외 접속은 403).
+  //    ⚠️ 해외 여행 중에는 사진이 안 보인다. 풀려면 이 줄을 지우거나 allowlist('KR', 'JP', ...) 처럼 나라를 추가한다.
   const cdn = new cloudfront.Distribution(stack, 'FilesCdn', {
-    comment: 'wishkit files (avatars, share pages)',
-    defaultBehavior: {
-      origin: origins.S3BucketOrigin.withOriginAccessControl(bucket),
-      viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
-      allowedMethods: cloudfront.AllowedMethods.ALLOW_GET_HEAD,
-      cachePolicy: new cloudfront.CachePolicy(stack, 'FilesCachePolicy', {
-        comment: 'wishkit files: 5분 기본, 파일 이름이 매번 달라서 오래 캐시해도 안전',
-        defaultTtl: Duration.minutes(5),
-        minTtl: Duration.seconds(0),
-        maxTtl: Duration.days(7),
-        enableAcceptEncodingGzip: true,
-        enableAcceptEncodingBrotli: true,
-      }),
-      responseHeadersPolicy: cloudfront.ResponseHeadersPolicy.SECURITY_HEADERS,
-    },
+    comment: 'wishkit files (avatars, tag photos)',
+    defaultBehavior: behavior(origins.S3BucketOrigin.withOriginAccessControl(bucket)),
     priceClass: cloudfront.PriceClass.PRICE_CLASS_200, // 한국 포함, 가장 비싼 지역 제외
-    // 한국에서만 열린다. 해외 접속은 403(거부).
-    // ⚠️ 해외 여행 중에는 사진이 안 보이고, 해외 친구에게 보낸 공유 링크도 안 열린다.
-    //    풀려면 이 줄을 지우거나 allowlist('KR', 'JP', ...) 처럼 나라를 추가한다.
     geoRestriction: cloudfront.GeoRestriction.allowlist('KR'),
+  });
+
+  // ② 공유 페이지 전용 배달망: 앱이 없는 사람에게 SNS로 보내는 살까말까 링크. 나라 제한 없음.
+  //    CloudFront 의 나라 제한은 배달망 단위라서, 공유 페이지만 열려면 배달망을 따로 둬야 한다.
+  //    originPath 로 share-pages/ 폴더만 연결한다 → 이 주소로는 프로필 사진 등 다른 폴더를 읽을 수 없다.
+  //    해외 SNS(인스타그램·페이스북·X 등)의 미리보기 서버도 이 페이지를 읽을 수 있게 된다.
+  const shareCdn = new cloudfront.Distribution(stack, 'SharePagesCdn', {
+    comment: 'wishkit public share pages (share-pages/ only, worldwide)',
+    defaultBehavior: behavior(
+      origins.S3BucketOrigin.withOriginAccessControl(bucket, { originPath: '/share-pages' }),
+    ),
+    priceClass: cloudfront.PriceClass.PRICE_CLASS_200,
   });
 
   // 공유 페이지(살까말까 링크)는 올린 지 28일 뒤 S3 가 알아서 지운다.
@@ -181,6 +203,10 @@ cfnUserPoolClient.tokenValidityUnits = {
 
   // 앱이 파일 주소를 만들 때 쓰는 배달망 주소 → amplify_outputs.dart 의 custom 에 들어간다.
   backend.addOutput({
-    custom: { filesBaseUrl: `https://${cdn.distributionDomainName}` },
+    custom: {
+      filesBaseUrl: `https://${cdn.distributionDomainName}`,
+      // 공유 페이지 주소: https://<공유 배달망>/<주인 폴더>/<페이지>.html (share-pages/ 는 주소에 안 붙음)
+      sharePagesBaseUrl: `https://${shareCdn.distributionDomainName}`,
+    },
   });
 }

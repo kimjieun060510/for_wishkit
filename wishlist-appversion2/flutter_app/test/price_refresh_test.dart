@@ -20,6 +20,7 @@ Product _product({int price = 100000, int? originalPrice, int? discount}) =>
       discount: discount,
       productUrl: _url,
       memo: '고민 중',
+      tagImageUrl: 'https://cdn/tag.jpg',
     );
 
 Future<AppStore> _store(
@@ -68,6 +69,7 @@ void main() {
     expect(p.discount, 20);
     expect(p.name, '클래식 반소매 티셔츠');
     expect(p.memo, '고민 중');
+    expect(p.tagImageUrl, 'https://cdn/tag.jpg');
     expect(store.priceCheckedAt(1), isNotNull);
   });
 

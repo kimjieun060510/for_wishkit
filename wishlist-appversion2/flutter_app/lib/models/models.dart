@@ -53,6 +53,7 @@ class Product {
     this.productUrl,
     this.memo,
     this.isPublic = false,
+    this.tagImageUrl,
   });
 
   final int id;
@@ -67,6 +68,9 @@ class Product {
   final String? memo;
   final bool isPublic;
 
+  /// 태그 사진으로 담은 상품이면 그 태그 사진 주소. 본인만 본다(친구 공개 목록에는 없음).
+  final String? tagImageUrl;
+
   Product copyWith({
     int? id,
     String? listId,
@@ -79,6 +83,7 @@ class Product {
     String? productUrl,
     String? memo,
     bool? isPublic,
+    String? tagImageUrl,
   }) {
     return Product(
       id: id ?? this.id,
@@ -92,9 +97,12 @@ class Product {
       productUrl: productUrl ?? this.productUrl,
       memo: memo ?? this.memo,
       isPublic: isPublic ?? this.isPublic,
+      tagImageUrl: tagImageUrl ?? this.tagImageUrl,
     );
   }
 
+  /// 살까말까 바구니로 친구에게 보낼 때도 쓰인다 — 그래서 본인만 보는 [tagImageUrl]은 일부러
+  /// 넣지 않는다(서버 저장은 user_data_store의 upsertProduct가 따로 한다).
   Map<String, dynamic> toJson() => {
     'id': id,
     'listId': listId,
@@ -121,6 +129,7 @@ class Product {
     productUrl: json['productUrl'] as String?,
     memo: json['memo'] as String?,
     isPublic: json['isPublic'] as bool? ?? false,
+    tagImageUrl: json['tagImageUrl'] as String?,
   );
 }
 

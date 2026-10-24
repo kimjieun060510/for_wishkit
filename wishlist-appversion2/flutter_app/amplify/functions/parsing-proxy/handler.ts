@@ -46,8 +46,7 @@ export const handler: AppSyncResolverHandler<Args, ExtractedProduct | Identified
       );
       return toIdentifiedTag(body);
     }
-    case 'extractProduct':
-    default: {
+    case 'extractProduct': {
       const { url } = event.arguments as { url: string };
       if (!isValidHttpUrl(url)) {
         throw new Error('유효하지 않은 URL입니다.');
@@ -55,6 +54,10 @@ export const handler: AppSyncResolverHandler<Args, ExtractedProduct | Identified
       const body = await postToEngine<EngineExtractResponse>('/extract', { url }, FETCH_TIMEOUT_MS);
       return toExtractedProduct(body);
     }
+    default:
+      // 원래는 모르는 필드도 /extract로 흘러갔다 — 스키마에 필드를 추가하고 여기를 빠뜨리면
+      // 엉뚱한 호출 대신 바로 알아챌 수 있게 막는다.
+      throw new Error(`Unknown field: ${event.info.fieldName}`);
   }
 };
 

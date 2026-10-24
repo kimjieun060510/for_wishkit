@@ -200,3 +200,64 @@ def test_identify_raises_when_tag_reading_fails():
     with pytest.raises(IdentifyError):
         _run(identify(b"img", "image/jpeg", read_tag=read_tag, search=None,
                       render_page=None, time_left=lambda: 40))
+
+
+# ── 바코드 검증 · 태그 가격 · 후보 순위 (2026-10-23 추가) ──
+
+def _tag_reader(tag):
+    async def read_tag(img, mime):
+        return _ok(dict(tag))
+    return read_tag
+
+
+def test_identify_drops_barcode_with_wrong_check_digit():
+    seen = {}
+
+    async def search(tag):
+        seen["tag"] = tag
+        return _ok({"text": "", "sources": []})
+
+    out = _run(identify(b"img", "image/jpeg", read_tag=_tag_reader({**NIKE_TAG, "barcode": "8801234567890"}),
+                        search=search, render_page=None, time_left=lambda: 40))
+    assert seen["tag"]["barcode"] is None
+    assert out.tag["barcode_rejected"] == "8801234567890"
+
+
+def test_identify_prefers_page_showing_tag_price_among_equal_matches():
+    a, b = "https://www.musinsa.com/products/1", "https://www.29cm.co.kr/products/2"
+    read_tag, search, render_page, _ = _fakes(
+        f"OFFICIAL_DOMAIN: 없음\nURL: {a}\nURL: {b}",
+        {a: PageView(True, a, "DV1234-100 99,000원"), b: PageView(True, b, "DV1234-100 정가 139,000원")},
+    )
+    out = _run(identify(b"img", "image/jpeg", read_tag=read_tag, search=search,
+                        render_page=render_page, time_left=lambda: 40))
+    assert out.match["url"] == b and out.match["tag_price_seen"] is True
+
+
+def test_official_base_code_match_beats_mall_full_code_match():
+    official, mall = "https://www.nike.com/kr/t/af1/x", "https://www.musinsa.com/products/1"
+    read_tag, search, render_page, _ = _fakes(
+        f"OFFICIAL_DOMAIN: nike.com\nURL: {mall}\nURL: {official}",
+        {mall: PageView(True, mall, "나이키 DV1234-100"), official: PageView(True, official, "스타일: DV1234")},
+    )
+    out = _run(identify(b"img", "image/jpeg", read_tag=read_tag, search=search,
+                        render_page=render_page, time_left=lambda: 40))
+    assert out.match["url"] == official and out.match["verified_by"] == "product_code_base"
+
+
+def test_mall_code_match_still_beats_official_name_only_match():
+    tag = {**NIKE_TAG, "product_code": None, "barcode": None, "product_name": "소프트 헨리넥 반팔 티셔츠"}
+    official, mall = "https://www.nike.com/kr/t/x", "https://www.musinsa.com/products/1"
+
+    async def search(t):
+        return _ok({"text": f"OFFICIAL_DOMAIN: nike.com\nURL: {official}\nURL: {mall}", "sources": []})
+
+    pages = {official: PageView(True, official, "NIKE 소프트 헨리넥 반팔 티셔츠"),
+             mall: PageView(True, mall, "NIKE 소프트 헨리넥 반팔 티셔츠")}
+
+    async def render_page(url):
+        return pages[url]
+
+    out = _run(identify(b"img", "image/jpeg", read_tag=_tag_reader(tag), search=search,
+                        render_page=render_page, time_left=lambda: 40))
+    assert out.match["url"] == official and out.match["verified_by"] == "name"  # 둘 다 이름 → 공식몰

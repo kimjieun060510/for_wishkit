@@ -100,4 +100,18 @@ void main() {
     );
     expect(runner.lastDocument, isNull);
   });
+
+  test('태그 사진 주소는 친구에게 보내는 JSON(살까말까)에 들어가지 않는다', () {
+    final p = Product(
+      id: 1,
+      listId: 'a',
+      name: '니트',
+      price: 1000,
+      image: '',
+      platform: '',
+      tagImageUrl: 'https://cdn/tag-photos/me/x.jpg',
+    );
+    expect(p.toJson().containsKey('tagImageUrl'), isFalse);
+    expect(p.copyWith(price: 2000).tagImageUrl, 'https://cdn/tag-photos/me/x.jpg');
+  });
 }

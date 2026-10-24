@@ -10,7 +10,7 @@ const _handleFields = 'handleLower ownerId maskedEmail';
 const _tabFields = 'ownerId tabId name isPublic colorHex sortOrder';
 const _productFields =
     'ownerId productId listId name price image platform originalPrice '
-    'discount productUrl memo isPublic';
+    'discount productUrl memo isPublic tagImageUrl';
 
 abstract final class Gql {
   // ── Profile ──

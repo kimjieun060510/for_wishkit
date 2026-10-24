@@ -333,6 +333,10 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
                             ],
                           ),
                         ),
+                        if (isOwn && (product.tagImageUrl ?? '').isNotEmpty) ...[
+                          const SizedBox(height: 10),
+                          _TagPhotoRow(url: product.tagImageUrl!),
+                        ],
                         const SizedBox(height: 14),
                         Row(
                           children: [
@@ -378,6 +382,107 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
                 ),
               ),
             ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// 태그 사진으로 담은 상품의 태그 사진: 작은 미리보기 + "태그 사진 보기" (누르면 크게).
+/// 본인 상품에만 보인다(친구 공개 목록에는 주소 자체가 없다).
+class _TagPhotoRow extends StatelessWidget {
+  const _TagPhotoRow({required this.url});
+
+  final String url;
+
+  void _openFull(BuildContext context) {
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => Dialog(
+        insetPadding: const EdgeInsets.all(12),
+        backgroundColor: Colors.black,
+        child: Stack(
+          children: [
+            // 두 손가락으로 확대해서 작은 글씨(품번)도 볼 수 있게.
+            InteractiveViewer(
+              maxScale: 5,
+              child: Center(
+                child: Image.network(
+                  url,
+                  fit: BoxFit.contain,
+                  errorBuilder: (_, __, ___) => const Padding(
+                    padding: EdgeInsets.all(24),
+                    child: Text(
+                      '태그 사진을 불러오지 못했어요',
+                      style: TextStyle(color: Colors.white),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            Positioned(
+              top: 4,
+              right: 4,
+              child: IconButton(
+                icon: const Icon(Icons.close, color: Colors.white),
+                onPressed: () => Navigator.of(ctx).pop(),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: () => _openFull(context),
+      borderRadius: BorderRadius.circular(12),
+      child: Container(
+        padding: const EdgeInsets.all(10),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: DiaryColors.ink.withValues(alpha: 0.7),
+            width: 1.4,
+          ),
+        ),
+        child: Row(
+          children: [
+            ClipRRect(
+              borderRadius: BorderRadius.circular(8),
+              child: Image.network(
+                url,
+                width: 56,
+                height: 56,
+                fit: BoxFit.cover,
+                errorBuilder: (_, __, ___) => Container(
+                  width: 56,
+                  height: 56,
+                  color: DiaryColors.grid,
+                  child: const Icon(Icons.broken_image_outlined, size: 20),
+                ),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    '태그 사진',
+                    style: DiaryTheme.body(14, weight: FontWeight.w700),
+                  ),
+                  Text(
+                    '담을 때 찍은 태그예요 · 눌러서 크게 보기',
+                    style: DiaryTheme.body(12, color: DiaryColors.inkSoft),
+                  ),
+                ],
+              ),
+            ),
+            const Icon(Icons.zoom_in, size: 20),
           ],
         ),
       ),

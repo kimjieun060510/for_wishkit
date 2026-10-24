@@ -42,7 +42,7 @@ class ProviderResult:
     error: str | None = None
 
 
-def _to_gemini_schema(schema: dict) -> dict:
+def to_gemini_schema(schema: dict) -> dict:
     """표준 JSON Schema(`"type": ["string", "null"]`처럼 null을 유니언으로 표현)를
     google-genai가 요구하는 OpenAPI 3.0 서브셋(`nullable: true`)으로 변환한다."""
     out: dict = {}
@@ -58,9 +58,9 @@ def _to_gemini_schema(schema: dict) -> dict:
         if key in schema:
             out[key] = schema[key]
     if "properties" in schema:
-        out["properties"] = {k: _to_gemini_schema(v) for k, v in schema["properties"].items()}
+        out["properties"] = {k: to_gemini_schema(v) for k, v in schema["properties"].items()}
     if "items" in schema:
-        out["items"] = _to_gemini_schema(schema["items"])
+        out["items"] = to_gemini_schema(schema["items"])
     return out
 
 
@@ -68,7 +68,7 @@ def _to_gemini_schema(schema: dict) -> dict:
 _GENERATION_CONFIG = {
     "system_instruction": SYSTEM_PROMPT,
     "response_mime_type": "application/json",
-    "response_schema": _to_gemini_schema(OUTPUT_JSON_SCHEMA),
+    "response_schema": to_gemini_schema(OUTPUT_JSON_SCHEMA),
 }
 
 _RETRY_DELAY_RE = re.compile(r"retryDelay['\"]?\s*:\s*['\"]?(\d+(?:\.\d+)?)s")
@@ -94,7 +94,7 @@ def _client():
     return genai.Client(api_key=config.GEMINI_API_KEY)
 
 
-def _generate(
+def generate(
     label: str,
     contents,
     max_retries: int,
@@ -102,13 +102,18 @@ def _generate(
     generation_config=None,
     model: str | None = None,
     parse_json: bool = True,
+    max_retry_wait_s: float | None = None,
 ) -> ProviderResult:
-    """Gemini 호출 + 429 재시도 공통 루프. 텍스트/비전 모드는 contents만 다르다.
+    """Gemini 호출 + 429 재시도 공통 루프. 상품 추출(텍스트/비전)과 태그 찾기(tag_identify.py)가
+    같이 쓴다.
 
-    `generation_config`/`model`을 안 넘기면 상품 추출용 기본값(_GENERATION_CONFIG,
-    config.GEMINI_MODEL)을 쓴다 — 기존 call_gemini/call_gemini_vision 동작은 그대로다.
-    `parse_json=False`면 응답 객체 전체를 data에 그대로 담는다(검색 그라운딩처럼 JSON이
-    아닌 응답에서 grounding_metadata까지 읽어야 할 때)."""
+    - `generation_config`/`model`을 안 넘기면 상품 추출용 기본값(_GENERATION_CONFIG,
+      config.GEMINI_MODEL)을 쓴다.
+    - `parse_json=False`면 응답 객체 전체를 data["response"]에 담는다(검색 그라운딩처럼 JSON이
+      아닌 응답에서 grounding_metadata까지 읽어야 할 때).
+    - `max_retry_wait_s`: 429 재시도 전에 기다려야 할 시간이 이보다 길면 기다리지 않고 바로 실패로
+      돌려준다. 시간 예산이 빠듯한 요청(/identify-tag, 25초)에서 retryDelay(보통 20초 안팎)만큼
+      자다가 전체 요청이 504로 끝나는 걸 막는다. None이면 제한 없음(기존 동작)."""
     model = model or config.GEMINI_MODEL
     gen_config = _GENERATION_CONFIG if generation_config is None else generation_config
     started = now_ms()
@@ -123,10 +128,12 @@ def _generate(
             except Exception as exc:
                 if not _is_rate_limit(exc) or attempt == max_retries:
                     raise
-                delay = _retry_delay_seconds(exc)
+                wait = _retry_delay_seconds(exc) + 1.0  # 서버가 알려준 지연 + 여유 1초
+                if max_retry_wait_s is not None and wait > max_retry_wait_s:
+                    raise
                 logger.warning("[%s] 429 rate limit — %.0f초 대기 후 재시도 (%d/%d)",
-                               label, delay, attempt + 1, max_retries)
-                time.sleep(delay + 1.0)  # 서버가 알려준 지연 + 여유 1초
+                               label, wait, attempt + 1, max_retries)
+                time.sleep(wait)
     except Exception as exc:  # noqa: BLE001 — 실패는 예외 대신 결과로 표현
         return ProviderResult(label, model, False, None, now_ms() - started,
                               error=f"{type(exc).__name__}: {exc}")
@@ -135,7 +142,7 @@ def _generate(
 
 def call_gemini(cleaned_html: str, *, max_retries: int = config.GEMINI_MAX_RETRIES) -> ProviderResult:
     """1차 추출: 정제된 HTML을 텍스트로 보낸다."""
-    return _generate("gemini", build_user_prompt(cleaned_html), max_retries)
+    return generate("gemini", build_user_prompt(cleaned_html), max_retries)
 
 
 def call_gemini_vision(
@@ -149,4 +156,4 @@ def call_gemini_vision(
         types.Part.from_bytes(data=screenshot, mime_type="image/jpeg"),
         build_vision_user_prompt(image_candidates),
     ]
-    return _generate("gemini_vision", contents, max_retries)
+    return generate("gemini_vision", contents, max_retries)

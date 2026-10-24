@@ -18,7 +18,6 @@ import asyncio
 import base64
 import binascii
 import logging
-import time
 from contextlib import asynccontextmanager
 from functools import partial
 from typing import Literal
@@ -162,53 +161,68 @@ async def extract(req: ExtractRequest):
     return result
 
 
+# base64는 4바이트마다 원본 3바이트 — 디코딩하기 전에 길이만으로 너무 큰 요청을 먼저 거른다.
+_MAX_IMAGE_BASE64_CHARS = -(-config.IDENTIFY_MAX_IMAGE_BYTES // 3) * 4
+
+
 async def _render_for_identify(url: str, budget_s: float) -> PageView:
     """후보 페이지 하나 렌더링. 남은 시간(budget_s) 안에 못 끝내면 실패로 돌려서 전체 요청이
-    504로 끝나지 않게 한다(앞에서 읽은 태그 정보는 not_found로라도 앱에 돌려주기 위해)."""
-    nav_timeout_ms = int(max(1.0, min(config.RENDER_NAV_TIMEOUT_MS / 1000, budget_s)) * 1000)
-    try:
+    504로 끝나지 않게 한다(앞에서 읽은 태그 정보는 not_found로라도 앱에 돌려주기 위해).
+
+    렌더링 슬롯(render_semaphore)을 기다리는 시간도 budget_s 안에 넣는다 — /extract 요청이 몰려
+    슬롯이 다 차 있으면 원래는 슬롯이 빌 때까지 무작정 기다리다가 전체 25초를 넘겨 504가 났다."""
+    budget_s = max(1.0, budget_s)
+    nav_timeout_ms = int(min(config.RENDER_NAV_TIMEOUT_MS / 1000, budget_s) * 1000)
+
+    async def _guarded():
         async with app.state.render_semaphore:
-            r = await asyncio.wait_for(
-                render(app.state.browser, url, nav_timeout_ms=nav_timeout_ms),
-                timeout=max(1.0, budget_s),
-            )
+            return await render(app.state.browser, url, nav_timeout_ms=nav_timeout_ms)
+
+    try:
+        r = await asyncio.wait_for(_guarded(), timeout=budget_s)
     except TimeoutError:
         return PageView(ok=False, final_url=url, raw_text="", error="시간 초과")
     return PageView(ok=r.ok, final_url=r.final_url or url, raw_text=r.raw_text, error=r.error)
 
 
-@app.post("/identify-tag")
-async def identify_tag(req: IdentifyTagRequest):
+def _decode_image(image_base64: str) -> bytes:
+    if len(image_base64) > _MAX_IMAGE_BASE64_CHARS:
+        raise HTTPException(413, f"사진이 너무 큽니다(최대 {config.IDENTIFY_MAX_IMAGE_BYTES} bytes)")
     try:
-        image = base64.b64decode(req.image_base64, validate=True)
+        image = base64.b64decode(image_base64, validate=True)
     except (binascii.Error, ValueError):
         raise HTTPException(422, "image_base64가 올바른 base64가 아닙니다") from None
     if not image:
         raise HTTPException(422, "사진이 비어 있습니다")
     if len(image) > config.IDENTIFY_MAX_IMAGE_BYTES:
         raise HTTPException(413, f"사진이 너무 큽니다(최대 {config.IDENTIFY_MAX_IMAGE_BYTES} bytes)")
+    return image
 
-    started = time.monotonic()
+
+@app.post("/identify-tag")
+async def identify_tag(req: IdentifyTagRequest):
+    image = _decode_image(req.image_base64)
+    started = now_ms()
 
     def time_left() -> float:
-        return config.IDENTIFY_TIMEOUT_S - (time.monotonic() - started)
+        return config.IDENTIFY_TIMEOUT_S - (now_ms() - started) / 1000
 
-    # AppSync 30초 한도 안에서 끝나야 하므로 429 재시도는 1번만(기본 4번은 최대 수십 초 대기).
-    async def read_tag(img: bytes, mime: str):
-        result, _ = await _run_gemini(partial(call_gemini_tag, max_retries=1), img, mime)
+    async def gemini_once(fn, *args) -> ProviderResult:
+        # AppSync 30초 한도 안에서 끝나야 하므로 429 재시도는 1번만, 그리고 남은 시간 안에 끝날
+        # 때만 기다린다(retryDelay가 더 길면 바로 실패 → 태그 결과라도 not_found로 돌려줌).
+        call = partial(fn, max_retries=1, max_retry_wait_s=max(0.0, time_left() - 2.0))
+        result, _ = await _run_gemini(call, *args)
         return result
-
-    async def search(tag: dict):
-        result, _ = await _run_gemini(partial(call_gemini_search, max_retries=1), tag)
-        return result
-
-    async def render_page(url: str) -> PageView:
-        return await _render_for_identify(url, time_left() - 1.0)
 
     try:
         outcome = await asyncio.wait_for(
-            identify(image, req.mime_type, read_tag=read_tag, search=search,
-                     render_page=render_page, time_left=time_left),
+            identify(
+                image, req.mime_type,
+                read_tag=lambda img, mime: gemini_once(call_gemini_tag, img, mime),
+                search=lambda tag: gemini_once(call_gemini_search, tag),
+                render_page=lambda url: _render_for_identify(url, time_left() - 1.0),
+                time_left=time_left,
+            ),
             timeout=config.IDENTIFY_TIMEOUT_S,
         )
     except TimeoutError:
@@ -219,9 +233,7 @@ async def identify_tag(req: IdentifyTagRequest):
         logger.exception("identify-tag 알 수 없는 오류")
         raise HTTPException(500, f"{type(exc).__name__}: {exc}") from exc
 
-    body = outcome.to_dict()
-    body["metrics"] = {"total_elapsed_ms": int((time.monotonic() - started) * 1000)}
-    return body
+    return {**outcome.to_dict(), "metrics": {"total_elapsed_ms": now_ms() - started}}
 
 
 @app.get("/healthz")

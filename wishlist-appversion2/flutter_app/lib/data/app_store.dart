@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -478,11 +479,18 @@ class AppStore extends ChangeNotifier {
   }
 
   Future<void> removeProduct(int id) async {
+    final tagImageUrl = productById(id)?.tagImageUrl;
     products = products.where((p) => p.id != id).toList();
     basket = basket.where((b) => b.product.id != id).toList();
     final userId = uid;
     if (userId != null) {
       await _repo.deleteProduct(userId, id);
+      // 태그 사진도 같이 지운다. 실패해도 상품 삭제는 이미 끝났으니 그냥 넘어간다.
+      if (tagImageUrl != null) {
+        try {
+          await _repo.deleteTagPhoto(tagImageUrl);
+        } catch (_) {}
+      }
     }
     await _persistBasket();
     notifyListeners();
@@ -534,6 +542,24 @@ class AppStore extends ChangeNotifier {
       throw const TagIdentifyUnavailable();
     }
     return _repo.identifyProductFromTag(image, mimeType: mimeType);
+  }
+
+  /// 태그 사진을 저장소에 올리고 주소를 돌려준다. 상품 저장([addParsedProduct]) 전에 부른다.
+  Future<String> uploadTagPhoto(
+    Uint8List image, {
+    String mimeType = 'image/jpeg',
+  }) async {
+    if (!backendReady || uid == null) {
+      throw const TagIdentifyUnavailable();
+    }
+    return _repo.uploadTagPhoto(image, mimeType: mimeType);
+  }
+
+  /// 올렸지만 상품 저장에 쓰이지 못한 태그 사진을 지운다. 실패해도 조용히 넘어간다.
+  Future<void> discardTagPhoto(String url) async {
+    try {
+      await _repo.deleteTagPhoto(url);
+    } catch (_) {}
   }
 
   /// 이 기기에서 마지막으로 가격을 확인한 시각. 확인한 적이 없으면 null.
@@ -622,6 +648,7 @@ class AppStore extends ChangeNotifier {
       productUrl: product.productUrl,
       memo: product.memo,
       isPublic: product.isPublic,
+      tagImageUrl: product.tagImageUrl,
     );
     final changed =
         product.price != newPrice ||
@@ -704,6 +731,7 @@ class AppStore extends ChangeNotifier {
     ParsedProductInfo info, {
     required String listId,
     String memo = '',
+    String? tagImageUrl,
   }) async {
     final lockKey =
         'addParsedProduct:${info.productUrl.isEmpty ? info.name : info.productUrl}';
@@ -722,6 +750,7 @@ class AppStore extends ChangeNotifier {
         productUrl: info.productUrl,
         memo: trimmedMemo.isEmpty ? null : trimmedMemo,
         isPublic: _isListPublic(listId),
+        tagImageUrl: tagImageUrl,
       );
       products = [...products, product];
       final userId = uid;
@@ -1180,11 +1209,8 @@ class AppStore extends ChangeNotifier {
     return shared;
   }
 
-  /// Returns false when a send for the same basket is already in flight.
-  Future<bool> sendBasketToFriends(
-    List<String> friendIds, {
-    String memo = '',
-  }) async {
+  /// 장바구니에서 고른 상품들. 하나도 없으면 예외.
+  List<Product> _selectedBasketProducts() {
     final selected = basket
         .where((b) => b.isSelected)
         .map((b) => b.product)
@@ -1192,11 +1218,36 @@ class AppStore extends ChangeNotifier {
     if (selected.isEmpty) {
       throw Exception('공유할 상품을 선택해 주세요.');
     }
+    return selected;
+  }
+
+  /// Returns false when a send for the same basket is already in flight.
+  Future<bool> sendBasketToFriends(
+    List<String> friendIds, {
+    String memo = '',
+  }) async {
     return resendBasketToFriends(
-      items: selected,
+      items: _selectedBasketProducts(),
       friendIds: friendIds,
       memo: memo,
     );
+  }
+
+  /// 장바구니에서 고른 상품으로 살까말까를 만들고, 링크로 볼 수 있는 공유 페이지를 올려 주소를 돌려준다.
+  /// 만든 살까말까는 마이페이지 "보낸 살까말까"에 남는다(다시 공유하면 같은 주소).
+  Future<String> publishSelectedBasketLink() async {
+    final items = _selectedBasketProducts();
+    _ensureBackend();
+    // 로그인 확인을 먼저 한다 — 안 그러면 공유는 실패했는데 "보낸 살까말까"에 빈 기록만 남는다.
+    _requireLinkShareLogin();
+    final shared = await rememberSentBasket(items: items);
+    return publishSharePage(shared);
+  }
+
+  void _requireLinkShareLogin() {
+    if (uid == null || !isLoggedIn) {
+      throw Exception('로그인하면 링크로 공유할 수 있어요.');
+    }
   }
 
   /// Returns false when a send for the same basket is already in flight.
@@ -1361,31 +1412,31 @@ class AppStore extends ChangeNotifier {
   /// clock so an actively re-shared link stays alive.
   Future<String> publishSharePage(SharedBasket basket) async {
     _ensureBackend();
-    final userId = uid;
-    if (userId == null || !isLoggedIn) {
-      throw Exception('로그인하면 링크로 공유할 수 있어요.');
-    }
+    _requireLinkShareLogin();
+    final userId = uid!;
+    // 화면이 들고 있던 basket 이 옛 값이어도 같은 공유 주소(publicPageId)를 다시 쓰도록 최신 값을 쓴다.
+    final current = sharedBaskets[basket.id] ?? basket;
     final pageId =
-        (basket.publicPageId != null && basket.publicPageId!.isNotEmpty)
-        ? basket.publicPageId!
+        (current.publicPageId != null && current.publicPageId!.isNotEmpty)
+        ? current.publicPageId!
         : const Uuid().v4();
     final expiresAt = DateTime.now().add(kSharePageTtl);
-    final html = buildSharePageHtml(basket: basket, expiresAt: expiresAt);
+    final html = buildSharePageHtml(basket: current, expiresAt: expiresAt);
     final url = await _repo.uploadSharePage(
       uid: userId,
       pageId: pageId,
-      basketId: basket.id,
+      basketId: current.id,
       html: html,
       expiresAt: expiresAt,
     );
-    final updated = basket.copyWith(
+    final updated = current.copyWith(
       publicPageId: pageId,
       publicUrl: url,
       publicUrlExpiresAt: expiresAt,
-      channels: {...basket.channels, SharedChannel.link}.toList(),
+      channels: {...current.channels, SharedChannel.link}.toList(),
       lastSharedAt: DateTime.now(),
     );
-    sharedBaskets[basket.id] = updated;
+    sharedBaskets[current.id] = updated;
     await _persistShared();
     try {
       await _repo.upsertSentBasket(userId, updated);
@@ -1393,9 +1444,6 @@ class AppStore extends ChangeNotifier {
     notifyListeners();
     return url;
   }
-
-  String shareUrlFor(SharedBasket basket) =>
-      basket.publicUrl ?? 'https://wishlist.app/shared/${basket.id}';
 
   Future<void> _persistShared() async {
     final prefs = await SharedPreferences.getInstance();

@@ -2,11 +2,13 @@
 태그 사진 → 상품 페이지 찾기 (POST /identify-tag).
 
 흐름:
-  1. 태그 읽기  — Gemini 비전으로 사진 속 태그에서 브랜드·품번·바코드·상품명·색상·태그 가격을 읽는다.
+  1. 태그 읽기  — Gemini 비전으로 사진 속 태그에서 브랜드·품번·바코드·상품명·색상·태그 가격과, 태그에
+                  같이 적힌 다른 코드들을 읽는다. 바코드는 검증 숫자가 안 맞으면 버린다(tag_codes.py).
   2. 검색       — Gemini + Google 검색 그라운딩으로 그 품번의 상품 상세 페이지 후보 URL을 찾는다.
                   브랜드 공식몰을 먼저, 없으면 국내 주요 쇼핑몰을 찾는다.
   3. 확인       — 후보 페이지를 실제로 렌더링해서 **품번이 페이지에 실제로 있는지** 확인한다.
-                  AI가 말한 URL을 그대로 믿지 않는다(검색 결과·URL 환각 방지).
+                  AI가 말한 URL을 그대로 믿지 않는다(검색 결과·URL 환각 방지). 색상 코드를 뗀 기본
+                  번호로도 확인하고, 태그 가격이 페이지에 보이면 같은 근거끼리 비교할 때 우선한다.
   4. 결과       — 확인된 URL 하나(공식몰 우선)를 돌려준다. 가격 읽기는 하지 않는다 — 앱이 그 URL을
                   기존 "URL로 담기"와 같은 경로(휴대폰 WebView)로 읽는다. 그래야 가격 정책이
                   두 갈래로 갈라지지 않는다.
@@ -25,7 +27,15 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 
 import config
-from providers import ProviderResult, _generate, _to_gemini_schema
+from compare import normalize_price_text
+from providers import ProviderResult, generate, to_gemini_schema
+from tag_codes import (
+    MIN_CODE_LEN,
+    clean_barcode,
+    code_evidence,
+    has_code,
+    normalize_code,
+)
 
 # ── 1. 태그 읽기 ────────────────────────────────────────────
 
@@ -34,9 +44,12 @@ TAG_SYSTEM_PROMPT = """\
 사진에 실제로 인쇄된 글자만 읽어서 JSON 스키마에 맞춰 반환하세요.
 
 # 규칙
-- product_code: 품번/스타일 넘버/Style No./Art. No./모델명처럼 상품을 구분하는 코드. 색상 코드가
-  붙어 있으면(예: "DV1234-100") 인쇄된 그대로 반환하세요.
-- barcode: 바코드 아래 숫자(EAN/UPC, 보통 8~14자리). 없으면 null.
+- product_code: 브랜드가 정한 품번/스타일 넘버/Style No./Art. No./모델명처럼 상품을 구분하는 코드.
+  색상 코드가 붙어 있으면(예: "DV1234-100", "485454-26") 인쇄된 그대로 반환하세요.
+  매장이 따로 붙인 가격 스티커의 관리번호·재고번호·사이즈 코드는 품번이 아닙니다.
+- other_codes: 사진에 보이는 그 밖의 영문·숫자 코드(매장 스티커 번호, 다른 표기의 품번 등)를 인쇄된
+  그대로 모두. product_code와 barcode에 넣은 값은 빼고, 없으면 빈 배열.
+- barcode: 바코드 아래 숫자(EAN/UPC, 보통 8·12·13자리). 숫자만. 없으면 null.
 - tag_price: 태그에 인쇄된 가격(원). 숫자만. 없으면 null.
 - 흐리거나 잘려서 확실히 읽을 수 없는 글자는 추측하지 말고 null로 두세요. 코드를 지어내면 엉뚱한
   상품을 찾게 됩니다 — "틀린 값보다 빈 값이 안전하다"가 이 서비스의 원칙입니다.
@@ -52,6 +65,7 @@ TAG_JSON_SCHEMA = {
         "is_product_tag": {"type": "boolean"},
         "brand": {"type": ["string", "null"]},
         "product_code": {"type": ["string", "null"]},
+        "other_codes": {"type": "array", "items": {"type": "string"}},
         "barcode": {"type": ["string", "null"]},
         "product_name": {"type": ["string", "null"]},
         "color": {"type": ["string", "null"]},
@@ -60,7 +74,7 @@ TAG_JSON_SCHEMA = {
         "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
     },
     "required": [
-        "is_product_tag", "brand", "product_code", "barcode", "product_name",
+        "is_product_tag", "brand", "product_code", "other_codes", "barcode", "product_name",
         "color", "size", "tag_price", "confidence",
     ],
 }
@@ -68,20 +82,27 @@ TAG_JSON_SCHEMA = {
 _TAG_GENERATION_CONFIG = {
     "system_instruction": TAG_SYSTEM_PROMPT,
     "response_mime_type": "application/json",
-    "response_schema": _to_gemini_schema(TAG_JSON_SCHEMA),
+    "response_schema": to_gemini_schema(TAG_JSON_SCHEMA),
 }
 
 
-def call_gemini_tag(image: bytes, mime_type: str, *, max_retries: int = config.GEMINI_MAX_RETRIES) -> ProviderResult:
+def call_gemini_tag(
+    image: bytes,
+    mime_type: str,
+    *,
+    max_retries: int = config.GEMINI_MAX_RETRIES,
+    max_retry_wait_s: float | None = None,
+) -> ProviderResult:
     from google.genai import types
 
     contents = [
         types.Part.from_bytes(data=image, mime_type=mime_type),
         "이 사진 속 상품 태그를 읽어 주세요.",
     ]
-    return _generate(
+    return generate(
         "gemini_tag", contents, max_retries,
         generation_config=_TAG_GENERATION_CONFIG, model=config.GEMINI_TAG_MODEL,
+        max_retry_wait_s=max_retry_wait_s,
     )
 
 
@@ -96,6 +117,7 @@ def build_search_prompt(tag: dict) -> str:
 
 브랜드: {v("brand")}
 품번: {v("product_code")}
+태그의 다른 코드: {", ".join(tag.get("other_codes") or []) or "(없음)"}
 바코드: {v("barcode")}
 상품명: {v("product_name")}
 색상: {v("color")}
@@ -112,15 +134,21 @@ URL: <상품 상세 페이지 URL>
 """
 
 
-def call_gemini_search(tag: dict, *, max_retries: int = config.GEMINI_MAX_RETRIES) -> ProviderResult:
+def call_gemini_search(
+    tag: dict,
+    *,
+    max_retries: int = config.GEMINI_MAX_RETRIES,
+    max_retry_wait_s: float | None = None,
+) -> ProviderResult:
     """Google 검색 그라운딩. 도구 사용과 JSON 스키마 강제를 같이 쓰면 모델/SDK 버전에 따라
     그라운딩 메타데이터가 비는 문제가 보고돼 있어서, 여기서는 일반 텍스트로 받아 직접 파싱한다."""
     from google.genai import types
 
     gen_config = types.GenerateContentConfig(tools=[types.Tool(google_search=types.GoogleSearch())])
-    result = _generate(
+    result = generate(
         "gemini_search", build_search_prompt(tag), max_retries,
         generation_config=gen_config, model=config.GEMINI_SEARCH_MODEL, parse_json=False,
+        max_retry_wait_s=max_retry_wait_s,
     )
     if not result.ok or not result.data:
         return result
@@ -242,45 +270,41 @@ def parse_search_output(text: str, sources: list[dict]) -> tuple[str | None, lis
 
 # ── 3. 확인 ────────────────────────────────────────────────
 
-_NON_ALNUM_RE = re.compile(r"[^0-9a-z가-힣]+")
-MIN_CODE_LEN = 5
-
-
-def normalize_code(s: str | None) -> str:
-    """'DV1234-100', 'dv1234 100', 'DV1234_100' → 'dv1234100'."""
-    return _NON_ALNUM_RE.sub("", (s or "").lower())
+NAME_TOKEN_HIT_RATIO = 0.7  # 품번 없이 이름으로만 확인할 때, 이름 단어 중 페이지에 있어야 하는 비율
 
 
 def _name_tokens(name: str) -> list[str]:
-    return [t for t in _NON_ALNUM_RE.split(name.lower()) if len(t) >= 2]
+    return [t for t in re.split(r"[^0-9a-z가-힣]+", name.lower()) if len(t) >= 2]
 
 
 def page_matches(tag: dict, raw_text: str, final_url: str) -> str | None:
-    """이 페이지가 태그의 그 상품인지. 'product_code' | 'barcode' | 'name' | None.
+    """이 페이지가 태그의 그 상품인지. 'product_code' | 'barcode' | 'product_code_base' | 'name' | None.
 
-    품번이 있으면 품번(또는 바코드)이 페이지 글자나 URL에 실제로 있어야 한다. 품번이 있는데 안
-    보이면 이름이 비슷해도 인정하지 않는다(같은 라인의 다른 색상·다른 모델일 수 있음).
-    품번·바코드가 둘 다 없을 때만 이름으로 확인하고, 그 경우 앱이 사용자에게 한 번 더 묻는다."""
-    haystack = normalize_code(raw_text) + " " + normalize_code(urllib.parse.unquote(final_url))
-    code = normalize_code(tag.get("product_code"))
-    barcode = normalize_code(tag.get("barcode"))
-    if len(code) >= MIN_CODE_LEN and code in haystack:
-        return "product_code"
-    if len(barcode) >= 8 and barcode in haystack:
-        return "barcode"
-    if code or barcode:
-        return None
+    코드 근거는 tag_codes.code_evidence() 참고. 품번이나 바코드가 있는데 페이지에서 안 보이면 이름이
+    비슷해도 인정하지 않는다(같은 라인의 다른 색상·다른 모델일 수 있음). 품번·바코드가 둘 다 없을 때만
+    이름으로 확인하고, 그 경우 앱이 사용자에게 한 번 더 묻는다."""
+    evidence = code_evidence(tag, raw_text, final_url)
+    if evidence or normalize_code(tag.get("product_code")) or normalize_code(tag.get("barcode")):
+        return evidence
 
-    name = tag.get("product_name") or ""
-    tokens = _name_tokens(name)
+    tokens = _name_tokens(tag.get("product_name") or "")
     if len(tokens) < 2:
         return None
-    text = raw_text.lower()
-    brand = (tag.get("brand") or "").lower().strip()
-    if brand and normalize_code(brand) not in normalize_code(text):
+    brand = normalize_code(tag.get("brand"))
+    if brand and brand not in normalize_code(raw_text):
         return None
+    text = raw_text.lower()
     hit = sum(1 for t in tokens if t in text)
-    return "name" if hit / len(tokens) >= 0.7 else None
+    return "name" if hit / len(tokens) >= NAME_TOKEN_HIT_RATIO else None
+
+
+def price_seen(tag: dict, raw_text: str) -> bool | None:
+    """태그 가격이 페이지에 보이는지. 태그에 가격이 없으면 None(판단 안 함).
+    태그 가격은 보통 정가라서, 할인 중인 페이지에도 정가로 같이 적혀 있는 경우가 많다."""
+    price = tag.get("tag_price")
+    if not isinstance(price, (int, float)) or price <= 0:
+        return None
+    return round(price) in normalize_price_text(raw_text)
 
 
 # ── 4. 오케스트레이션 ──────────────────────────────────────
@@ -303,7 +327,9 @@ class IdentifyError(Exception):
     """AI 호출 자체가 실패한 경우(→ 502). '못 찾음'은 에러가 아니라 정상 결과다."""
 
 
-_VERIFY_RANK = {"product_code": 0, "barcode": 0, "name": 1}
+# 코드 근거의 세기. 같은 사이트 종류 안에서만 비교한다 — 공식몰의 기본 번호 일치가 쇼핑몰의 품번 전체
+# 일치보다 앞선다(같은 상품이고 색상은 공식몰 페이지에서 고르면 된다). 이름 일치는 항상 맨 뒤.
+_CODE_STRENGTH = {"product_code": 0, "barcode": 0, "product_code_base": 1, "name": 2}
 _SOURCE_RANK = {"official": 0, "mall": 1}
 
 
@@ -328,11 +354,33 @@ class IdentifyOutcome:
 
 
 def _has_search_key(tag: dict) -> bool:
-    return bool(
-        len(normalize_code(tag.get("product_code"))) >= MIN_CODE_LEN
-        or len(normalize_code(tag.get("barcode"))) >= 8
-        or ((tag.get("brand") or "").strip() and (tag.get("product_name") or "").strip())
+    return has_code(tag) or bool(
+        (tag.get("brand") or "").strip() and (tag.get("product_name") or "").strip()
     )
+
+
+def _clean_tag(raw: dict) -> dict:
+    """AI가 읽은 태그를 검색·확인에 쓰기 전에 정리한다.
+    - 바코드: 검증 숫자가 안 맞으면 버리고 원본은 barcode_rejected에 남긴다(로그·정확도 분석용).
+    - other_codes: 품번·바코드와 같거나 너무 짧은 값, 중복을 뺀다."""
+    tag = dict(raw)
+    tag["barcode"], rejected = clean_barcode(tag.get("barcode"))
+    if rejected:
+        tag["barcode_rejected"] = rejected
+    taken = {normalize_code(tag.get("product_code")), normalize_code(tag.get("barcode"))}
+    others: list[str] = []
+    for code in tag.get("other_codes") or []:
+        norm = normalize_code(code)
+        if len(norm) >= MIN_CODE_LEN and norm not in taken:
+            taken.add(norm)
+            others.append(str(code).strip())
+    tag["other_codes"] = others
+    return tag
+
+
+def _checked(url: str, source: str, verified: bool | None, reason: str | None) -> dict:
+    """candidates_checked 한 줄 — 앱/로그에서 후보마다 왜 채택·탈락했는지 보여 준다."""
+    return {"url": url, "source": source, "verified": verified, "reason": reason}
 
 
 async def identify(
@@ -349,7 +397,7 @@ async def identify(
     tag_res = await read_tag(image, mime_type)
     if not tag_res.ok or not tag_res.data:
         raise IdentifyError(f"태그 읽기 실패: {tag_res.error}")
-    tag = tag_res.data
+    tag = _clean_tag(tag_res.data)
     if not tag.get("is_product_tag"):
         return IdentifyOutcome("not_a_tag", tag)
     if not _has_search_key(tag):
@@ -363,36 +411,36 @@ async def identify(
     )
 
     checked: list[dict] = []
-    best: dict | None = None
+    # (순위, match) — 순위가 작을수록 좋다:
+    # (이름으로만 확인, 공식몰 아님, 코드 근거 세기, 태그 가격이 페이지에 없음)
+    best: tuple[tuple[int, int, int, int], dict] | None = None
     for cand in candidates[:max_candidates]:
         if time_left() < min_seconds_per_render:
-            checked.append({"url": cand.url, "source": cand.source, "verified": None, "reason": "시간 부족"})
+            checked.append(_checked(cand.url, cand.source, None, "시간 부족"))
             continue
         page = await render_page(cand.url)
         if not page.ok:
-            checked.append({"url": cand.url, "source": cand.source, "verified": None,
-                            "reason": page.error or "렌더링 실패/차단"})
+            checked.append(_checked(cand.url, cand.source, None, page.error or "렌더링 실패/차단"))
             continue
         final_host = host_of(page.final_url) or cand.hint_host
         source = classify_host(final_host, official)
         if source == "other":
-            checked.append({"url": page.final_url, "source": source, "verified": None,
-                            "reason": "쇼핑몰이 아닌 페이지"})
+            checked.append(_checked(page.final_url, source, None, "쇼핑몰이 아닌 페이지"))
             continue
         verified_by = page_matches(tag, page.raw_text, page.final_url)
-        checked.append({"url": page.final_url, "source": source, "verified": verified_by is not None,
-                        "reason": verified_by})
+        checked.append(_checked(page.final_url, source, verified_by is not None, verified_by))
         if verified_by is None:
             continue
-        match = {"url": page.final_url, "host": final_host, "source": source, "verified_by": verified_by}
-        rank = (_VERIFY_RANK[verified_by], _SOURCE_RANK[source])
-        if best is None or rank < best["_rank"]:
-            best = {**match, "_rank": rank}
-        if rank == (0, 0):
-            break  # 공식몰 + 품번 확인 — 더 볼 필요 없음
+        price_ok = price_seen(tag, page.raw_text)
+        rank = (int(verified_by == "name"), _SOURCE_RANK[source], _CODE_STRENGTH[verified_by],
+                0 if price_ok is not False else 1)
+        if best is None or rank < best[0]:
+            best = (rank, {"url": page.final_url, "host": final_host, "source": source,
+                           "verified_by": verified_by, "tag_price_seen": price_ok})
+        if rank[:2] == (0, 0):
+            break  # 공식몰에서 코드로 확인됨 — 더 볼 필요 없음
 
     if best is None:
         return IdentifyOutcome("not_found", tag, official_domain=official, checked=checked,
                                note="품번이 확인된 상품 페이지를 찾지 못했어요" if candidates else "검색 결과가 없어요")
-    best.pop("_rank")
-    return IdentifyOutcome("found", tag, official_domain=official, match=best, checked=checked)
+    return IdentifyOutcome("found", tag, official_domain=official, match=best[1], checked=checked)

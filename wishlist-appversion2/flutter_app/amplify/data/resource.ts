@@ -98,6 +98,9 @@ const schema = a.schema({
       productUrl: a.string(),
       memo: a.string(),
       isPublic: a.boolean().required(),
+      // 태그 사진으로 담은 상품의 태그 사진 주소(파일 배달망). 메모처럼 본인만 본다 —
+      // publicWishlist(친구에게 보이는 목록)에는 넣지 않는다.
+      tagImageUrl: a.string(),
     })
     .identifier(['ownerId', 'productId'])
     .authorization((allow) => [

@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
@@ -37,6 +39,10 @@ class _ShareIntakeScreenState extends State<ShareIntakeScreen> {
   TagIdentifyResult? tagResult;
   bool identifying = false;
 
+  /// 태그 사진으로 찾았을 때 그 사진. 저장할 때 함께 올려서 상세 페이지에서 다시 볼 수 있게 한다.
+  Uint8List? tagPhoto;
+  String tagPhotoMime = 'image/jpeg';
+
   @override
   void initState() {
     super.initState();
@@ -66,7 +72,10 @@ class _ShareIntakeScreenState extends State<ShareIntakeScreen> {
     setState(() {
       loading = true;
       error = null;
-      if (!fromTag) tagResult = null;
+      if (!fromTag) {
+        tagResult = null;
+        tagPhoto = null; // URL로 직접 읽으면 앞서 찍은 태그 사진과는 다른 상품일 수 있다.
+      }
     });
     try {
       final info = input.contains('http') && !input.trim().contains(' ')
@@ -177,6 +186,8 @@ class _ShareIntakeScreenState extends State<ShareIntakeScreen> {
     setState(() {
       identifying = false;
       tagResult = result;
+      tagPhoto = result.status == TagIdentifyStatus.notATag ? null : bytes;
+      tagPhotoMime = mimeType;
     });
 
     switch (result.status) {
@@ -273,17 +284,46 @@ class _ShareIntakeScreenState extends State<ShareIntakeScreen> {
     });
     try {
       final store = context.read<AppStore>();
-      final product = await store.addParsedProduct(
-        info,
-        listId: selectedListId!,
-        memo: memoCtrl.text,
-      );
-      if (product == null) return;
+      // 태그 사진이 있으면 먼저 올린다. 실패해도 상품은 저장하고, 사진만 빠졌다고 알려 준다.
+      String? tagImageUrl;
+      var tagPhotoFailed = false;
+      final photo = tagPhoto;
+      if (photo != null) {
+        try {
+          tagImageUrl = await store.uploadTagPhoto(photo, mimeType: tagPhotoMime);
+        } catch (_) {
+          tagPhotoFailed = true;
+        }
+      }
+      final Product? product;
+      try {
+        product = await store.addParsedProduct(
+          info,
+          listId: selectedListId!,
+          memo: memoCtrl.text,
+          tagImageUrl: tagImageUrl,
+        );
+      } catch (_) {
+        // 상품 저장이 실패하면 방금 올린 태그 사진은 쓸 곳이 없으니 지운다.
+        if (tagImageUrl != null) await store.discardTagPhoto(tagImageUrl);
+        rethrow;
+      }
+      if (product == null) {
+        // 같은 상품을 이미 저장하는 중(연타) — 이번에 올린 사진은 쓰이지 않는다.
+        if (tagImageUrl != null) await store.discardTagPhoto(tagImageUrl);
+        return;
+      }
       store.setPendingShareUrl(null);
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('${product.name} 을(를) 저장했어요')));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              tagPhotoFailed
+                  ? '${product.name} 을(를) 저장했어요. 태그 사진은 저장하지 못했어요'
+                  : '${product.name} 을(를) 저장했어요',
+            ),
+          ),
+        );
         context.go('/');
       }
     } finally {
@@ -377,17 +417,44 @@ class _ShareIntakeScreenState extends State<ShareIntakeScreen> {
                         color: DiaryColors.ink.withValues(alpha: 0.2),
                       ),
                     ),
-                    child: Column(
+                    child: Row(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        for (final line in _tagResultLines(tagResult!))
-                          Text(
-                            line,
-                            style: DiaryTheme.body(
-                              12,
-                              color: DiaryColors.inkMuted,
+                        if (tagPhoto != null) ...[
+                          ClipRRect(
+                            borderRadius: BorderRadius.circular(8),
+                            child: Image.memory(
+                              tagPhoto!,
+                              width: 56,
+                              height: 56,
+                              fit: BoxFit.cover,
                             ),
                           ),
+                          const SizedBox(width: 10),
+                        ],
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              for (final line in _tagResultLines(tagResult!))
+                                Text(
+                                  line,
+                                  style: DiaryTheme.body(
+                                    12,
+                                    color: DiaryColors.inkMuted,
+                                  ),
+                                ),
+                              if (tagPhoto != null)
+                                Text(
+                                  '저장하면 태그 사진도 함께 저장돼요 (나만 볼 수 있어요)',
+                                  style: DiaryTheme.body(
+                                    11,
+                                    color: DiaryColors.inkSoft,
+                                  ),
+                                ),
+                            ],
+                          ),
+                        ),
                       ],
                     ),
                   ),
