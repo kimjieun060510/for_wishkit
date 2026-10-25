@@ -11,6 +11,7 @@ import '../../ads/native_ad_card.dart';
 import '../../data/app_store.dart';
 import '../../models/models.dart';
 import '../../theme/diary_theme.dart';
+import '../../theme/list_card.dart';
 import '../../widgets/diary_widgets.dart';
 
 class WishlistScreen extends StatefulWidget {
@@ -821,13 +822,14 @@ class WishlistProductCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Material(
+    // 광고 카드(NativeAdCard)와 높이를 맞춘다. 글자를 크게 설정한 기기에서는 더 커질 수 있다.
+    final card = Material(
       color: Colors.white,
-      elevation: 0.6,
+      elevation: ListCardMetrics.elevation,
       shadowColor: Colors.black26,
-      borderRadius: BorderRadius.circular(14),
+      borderRadius: BorderRadius.circular(ListCardMetrics.radius),
       child: InkWell(
-        borderRadius: BorderRadius.circular(14),
+        borderRadius: BorderRadius.circular(ListCardMetrics.radius),
         onTap: onOpen,
         child: Padding(
           padding: const EdgeInsets.all(10),
@@ -907,6 +909,10 @@ class WishlistProductCard extends StatelessWidget {
           ),
         ),
       ),
+    );
+    return ConstrainedBox(
+      constraints: const BoxConstraints(minHeight: ListCardMetrics.height),
+      child: card,
     );
   }
 }

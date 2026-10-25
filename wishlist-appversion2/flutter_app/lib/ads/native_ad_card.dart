@@ -2,13 +2,14 @@ import 'package:flutter/material.dart';
 import 'package:google_mobile_ads/google_mobile_ads.dart';
 
 import '../theme/diary_theme.dart';
+import '../theme/list_card.dart';
 import 'ads_config.dart';
 
 /// 상품 카드 사이에 들어가는 광고 카드.
 ///
-/// 상품 카드(흰색)와 헷갈리지 않게 한 톤 어두운 회색 바탕 + 왼쪽 위 "광고" 표시를 붙인다.
-/// AdMob 정책상 광고는 앱 콘텐츠와 분명히 구분돼야 한다 — 이 색·표시를 상품 카드와 비슷하게
-/// 바꾸지 말 것.
+/// 크기·모서리·그림자는 상품 카드와 같게(ListCardMetrics) 맞추고, 바탕만 한 톤 어두운 회색으로 둔다.
+/// AdMob 정책상 광고는 앱 콘텐츠와 분명히 구분돼야 한다 — 회색 바탕과 템플릿의 "Ad" 표시(AdMob 이
+/// 요구하는 광고 표시)를 상품 카드처럼 바꾸지 말 것.
 ///
 /// 광고를 못 불러오면(네트워크·광고 없음) 칸을 통째로 없앤다 — 빈 회색 박스를 남기지 않는다.
 class NativeAdCard extends StatefulWidget {
@@ -40,7 +41,7 @@ class _NativeAdCardState extends State<NativeAdCard>
       nativeTemplateStyle: NativeTemplateStyle(
         templateType: TemplateType.small,
         mainBackgroundColor: NativeAdCard.background,
-        cornerRadius: 10,
+        cornerRadius: ListCardMetrics.radius,
         callToActionTextStyle: NativeTemplateTextStyle(
           textColor: Colors.white,
           backgroundColor: DiaryColors.inkSoft,
@@ -88,45 +89,17 @@ class _NativeAdCardState extends State<NativeAdCard>
     super.build(context);
     final ad = _ad;
     if (ad == null || !_loaded) return const SizedBox.shrink();
-    return Container(
-      padding: const EdgeInsets.fromLTRB(6, 6, 6, 6),
-      decoration: BoxDecoration(
+    // 광고 화면(AdWidget)은 자기 크기가 없어 주어진 최대 크기까지 늘어난다. 예전에는 최대 높이 200 으로
+    // 둬서 내용(약 90)보다 훨씬 큰 빈 회색 칸이 생겼다 — 상품 카드와 같은 높이로 고정한다.
+    return SizedBox(
+      height: ListCardMetrics.height,
+      child: Material(
         color: NativeAdCard.background,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: DiaryColors.grid),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-            decoration: BoxDecoration(
-              color: DiaryColors.inkSoft,
-              borderRadius: BorderRadius.circular(4),
-            ),
-            child: const Text(
-              '광고',
-              style: TextStyle(
-                color: Colors.white,
-                fontSize: 10,
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-          ),
-          const SizedBox(height: 4),
-          // 크기는 AdMob 작은 템플릿 권장 범위(320×90 ~ 400×200)를 따른다.
-          Center(
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(
-                minWidth: 320,
-                minHeight: 90,
-                maxWidth: 400,
-                maxHeight: 200,
-              ),
-              child: AdWidget(ad: ad),
-            ),
-          ),
-        ],
+        elevation: ListCardMetrics.elevation,
+        shadowColor: Colors.black26,
+        borderRadius: BorderRadius.circular(ListCardMetrics.radius),
+        clipBehavior: Clip.antiAlias,
+        child: AdWidget(ad: ad),
       ),
     );
   }
