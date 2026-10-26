@@ -4,7 +4,8 @@
 흐름:
   1. 태그 읽기  — Gemini 비전으로 사진 속 태그에서 브랜드·품번·바코드·상품명·색상·태그 가격과, 태그에
                   같이 적힌 다른 코드들을 읽는다. 바코드는 검증 숫자가 안 맞으면 버린다(tag_codes.py).
-  2. 검색       — Gemini + Google 검색 그라운딩으로 그 품번의 상품 상세 페이지 후보 URL을 찾는다.
+  2. 검색       — 먼저 쇼핑몰(무신사) 검색창에 품번을 넣어 후보를 찾는다(AI 안 씀, 무료 — mall_search.py).
+                  거기서 품번이 확인된 페이지가 없을 때만 Gemini + Google 검색 그라운딩(유료 한도)을 쓴다.
                   브랜드 공식몰을 먼저, 없으면 국내 주요 쇼핑몰을 찾는다.
   3. 확인       — 후보 페이지를 실제로 렌더링해서 **품번이 페이지에 실제로 있는지** 확인한다.
                   AI가 말한 URL을 그대로 믿지 않는다(검색 결과·URL 환각 방지). 색상 코드를 뗀 기본
@@ -29,6 +30,7 @@ from dataclasses import dataclass, field
 
 import config
 from compare import normalize_price_text
+from mall_search import MALL_SEARCHES, MallSearch, search_query
 from providers import ProviderResult, generate, to_gemini_schema
 from tag_codes import (
     MIN_CODE_LEN,
@@ -319,6 +321,7 @@ class PageView:
     final_url: str
     raw_text: str
     error: str | None = None
+    html: str = ""  # 쇼핑몰 검색 결과 페이지에서 상품 링크를 꺼낼 때만 쓴다(정제된 HTML)
 
 
 ReadTagFn = Callable[[bytes, str], Awaitable[ProviderResult]]
@@ -401,6 +404,11 @@ def _checked(url: str, source: str, verified: bool | None, reason: str | None) -
     return {"url": url, "source": source, "verified": verified, "reason": reason}
 
 
+MALL_MAX_PRODUCTS = 3  # 쇼핑몰 검색 결과에서 열어 볼 상품 수(앞에서부터)
+# 쇼핑몰 단계에서는 이만큼을 구글 검색 단계 몫으로 남겨 둔다 — 쇼핑몰이 느리거나 막혀도 구글 검색은 돌게.
+GOOGLE_RESERVE_S = 10.0
+
+
 async def identify(
     image: bytes,
     mime_type: str,
@@ -411,6 +419,7 @@ async def identify(
     time_left: Callable[[], float],
     max_candidates: int = config.IDENTIFY_MAX_CANDIDATES,
     min_seconds_per_render: float = 6.0,
+    malls: tuple[MallSearch, ...] | None = None,
 ) -> IdentifyOutcome:
     tag_res = await read_tag(image, mime_type)
     if not tag_res.ok or not tag_res.data:
@@ -421,45 +430,111 @@ async def identify(
     if not _has_search_key(tag):
         return IdentifyOutcome("not_found", tag, note="태그에서 품번이나 브랜드·상품명을 읽지 못했어요")
 
+    checker = _Checker(tag, render_page, time_left, min_seconds_per_render)
+
+    # 2-1. 쇼핑몰 직접 검색 (AI 안 씀) — 품번이 확인되면 여기서 끝
+    checker.reserve_s = GOOGLE_RESERVE_S
+    mall_time_left = lambda: time_left() - GOOGLE_RESERVE_S
+    for mall in MALL_SEARCHES if malls is None else malls:
+        urls = await _mall_product_urls(mall, tag, render_page, mall_time_left, min_seconds_per_render)
+        await checker.check_all([Candidate(u, mall.domain, "mall") for u in urls], official=None)
+        if checker.code_verified:
+            return checker.outcome(official=None)
+    checker.reserve_s = 0.0
+
+    # 2-2. Gemini + 구글 검색 (유료 한도) — 쇼핑몰에서 못 찾았을 때만
     search_res = await search(tag)
     if not search_res.ok or not search_res.data:
         logger.warning("[identify] 검색 실패: %s", search_res.error)
-        return IdentifyOutcome("not_found", tag, note="상품 검색에 실패했어요. 잠시 후 다시 시도해 주세요")
+        if checker.best is not None:  # 쇼핑몰에서 이름으로라도 찾은 게 있으면 그걸 돌려준다
+            return checker.outcome(official=None)
+        return IdentifyOutcome("not_found", tag, checked=checker.checked,
+                               note="상품 검색에 실패했어요. 잠시 후 다시 시도해 주세요")
     official, candidates = parse_search_output(
         search_res.data.get("text", ""), search_res.data.get("sources", [])
     )
+    fresh = [c for c in candidates if c.url not in checker.seen][:max_candidates]
+    await checker.check_all(fresh, official=official, stop_on_official=True)
+    return checker.outcome(official=official)
 
-    checked: list[dict] = []
-    # (순위, match) — 순위가 작을수록 좋다:
-    # (이름으로만 확인, 공식몰 아님, 코드 근거 세기, 태그 가격이 페이지에 없음)
-    best: tuple[tuple[int, int, int, int], dict] | None = None
-    for cand in candidates[:max_candidates]:
-        if time_left() < min_seconds_per_render:
-            checked.append(_checked(cand.url, cand.source, None, "시간 부족"))
-            continue
-        page = await render_page(cand.url)
+
+async def _mall_product_urls(
+    mall: MallSearch, tag: dict, render_page: RenderFn, time_left: Callable[[], float], min_s: float
+) -> list[str]:
+    """쇼핑몰 검색 결과에서 상품 주소를 모은다. 검색 주소 모양을 앞에서부터 시도하고, 링크가 나오면 멈춘다."""
+    query = search_query(tag)
+    if not query:
+        return []
+    for url in mall.search_urls_for(query):
+        if time_left() < min_s:
+            break
+        page = await render_page(url)
         if not page.ok:
-            checked.append(_checked(cand.url, cand.source, None, page.error or "렌더링 실패/차단"))
-            continue
-        final_host = host_of(page.final_url) or cand.hint_host
-        source = classify_host(final_host, official)
-        if source == "other":
-            checked.append(_checked(page.final_url, source, None, "쇼핑몰이 아닌 페이지"))
-            continue
-        verified_by = page_matches(tag, page.raw_text, page.final_url)
-        checked.append(_checked(page.final_url, source, verified_by is not None, verified_by))
-        if verified_by is None:
-            continue
-        price_ok = price_seen(tag, page.raw_text)
-        rank = (int(verified_by == "name"), _SOURCE_RANK[source], _CODE_STRENGTH[verified_by],
-                0 if price_ok is not False else 1)
-        if best is None or rank < best[0]:
-            best = (rank, {"url": page.final_url, "host": final_host, "source": source,
-                           "verified_by": verified_by, "tag_price_seen": price_ok})
-        if rank[:2] == (0, 0):
-            break  # 공식몰에서 코드로 확인됨 — 더 볼 필요 없음
+            # 막혔거나 느리면 다른 검색 주소도 마찬가지일 가능성이 커서 바로 구글 검색으로 넘어간다
+            logger.info("[identify] %s 검색 페이지 실패(%s): %s", mall.name, url, page.error)
+            return []
+        urls = mall.product_urls_in(page.html, MALL_MAX_PRODUCTS)
+        logger.info("[identify] %s 검색 %r → 상품 %d개", mall.name, query, len(urls))
+        if urls:
+            return urls
+    return []
 
-    if best is None:
-        return IdentifyOutcome("not_found", tag, official_domain=official, checked=checked,
-                               note=_not_found_note(tag, checked))
-    return IdentifyOutcome("found", tag, official_domain=official, match=best[1], checked=checked)
+
+class _Checker:
+    """후보 페이지를 열어 품번(또는 이름)이 실제로 있는지 확인하고, 가장 좋은 일치를 기억한다.
+    쇼핑몰 직접 검색 후보와 구글 검색 후보가 같은 규칙으로 확인된다."""
+
+    def __init__(self, tag: dict, render_page: RenderFn, time_left: Callable[[], float], min_s: float):
+        self.tag = tag
+        self._render = render_page
+        self._time_left = time_left
+        self._min_s = min_s
+        self.checked: list[dict] = []
+        self.seen: set[str] = set()
+        self.reserve_s = 0.0  # 이 단계에서 남겨 둘 시간(쇼핑몰 단계 → 구글 검색 몫)
+        # (순위, match) — 순위가 작을수록 좋다:
+        # (이름으로만 확인, 공식몰 아님, 코드 근거 세기, 태그 가격이 페이지에 없음)
+        self.best: tuple[tuple[int, int, int, int], dict] | None = None
+
+    @property
+    def code_verified(self) -> bool:
+        """품번·바코드로 확인된 페이지가 있다(이름으로만 확인된 것은 제외)."""
+        return self.best is not None and self.best[0][0] == 0
+
+    async def check_all(self, candidates: list[Candidate], *, official: str | None,
+                        stop_on_official: bool = False) -> None:
+        for cand in candidates:
+            self.seen.add(cand.url)
+            if self._time_left() - self.reserve_s < self._min_s:
+                self.checked.append(_checked(cand.url, cand.source, None, "시간 부족"))
+                continue
+            page = await self._render(cand.url)
+            if not page.ok:
+                self.checked.append(_checked(cand.url, cand.source, None, page.error or "렌더링 실패/차단"))
+                continue
+            final_host = host_of(page.final_url) or cand.hint_host
+            source = classify_host(final_host, official)
+            if source == "other":
+                self.checked.append(_checked(page.final_url, source, None, "쇼핑몰이 아닌 페이지"))
+                continue
+            verified_by = page_matches(self.tag, page.raw_text, page.final_url)
+            self.checked.append(_checked(page.final_url, source, verified_by is not None, verified_by))
+            if verified_by is None:
+                continue
+            price_ok = price_seen(self.tag, page.raw_text)
+            rank = (int(verified_by == "name"), _SOURCE_RANK[source], _CODE_STRENGTH[verified_by],
+                    0 if price_ok is not False else 1)
+            if self.best is None or rank < self.best[0]:
+                self.best = (rank, {"url": page.final_url, "host": final_host, "source": source,
+                                    "verified_by": verified_by, "tag_price_seen": price_ok})
+            if stop_on_official and rank[:2] == (0, 0):
+                return  # 공식몰에서 코드로 확인됨 — 더 볼 필요 없음
+            if not stop_on_official and rank[0] == 0:
+                return  # 쇼핑몰 검색: 품번이 확인된 첫 상품이면 충분하다
+
+    def outcome(self, *, official: str | None) -> IdentifyOutcome:
+        if self.best is None:
+            return IdentifyOutcome("not_found", self.tag, official_domain=official, checked=self.checked,
+                                   note=_not_found_note(self.tag, self.checked))
+        return IdentifyOutcome("found", self.tag, official_domain=official, match=self.best[1],
+                               checked=self.checked)

@@ -6,6 +6,7 @@ import asyncio
 
 import pytest
 
+import tag_identify
 from providers import ProviderResult
 from tag_identify import (
     IdentifyError,
@@ -16,6 +17,13 @@ from tag_identify import (
     page_matches,
     parse_search_output,
 )
+
+
+@pytest.fixture(autouse=True)
+def _no_mall_search(monkeypatch):
+    """기존 테스트는 구글 검색 경로를 시험한다 — 쇼핑몰 직접 검색은 끈다(아래 무신사 테스트는 malls 를 직접 넘긴다)."""
+    monkeypatch.setattr(tag_identify, "MALL_SEARCHES", ())
+
 
 NIKE_TAG = {
     "is_product_tag": True,
@@ -261,3 +269,111 @@ def test_mall_code_match_still_beats_official_name_only_match():
     out = _run(identify(b"img", "image/jpeg", read_tag=_tag_reader(tag), search=search,
                         render_page=render_page, time_left=lambda: 40))
     assert out.match["url"] == official and out.match["verified_by"] == "name"  # 둘 다 이름 → 공식몰
+
+
+# ── 쇼핑몰(무신사) 직접 검색 → 못 찾으면 구글 검색 (2026-10-26) ──
+
+from mall_search import MUSINSA, search_query
+
+TAG_1993 = {**NIKE_TAG, "brand": "1993STUDIO", "product_code": "93251TTL1202", "barcode": None,
+            "other_codes": ["93251TTL120202M"], "product_name": None, "tag_price": 29900}
+SEARCH_URL = MUSINSA.search_urls_for("93251TTL1202")[0]
+P1, P2 = "https://www.musinsa.com/products/5551111", "https://www.musinsa.com/products/5552222"
+
+
+def _mall_run(pages: dict, *, search_result=None):
+    calls = {"render": [], "search": 0}
+
+    async def render_page(url):
+        calls["render"].append(url)
+        return pages.get(url) or PageView(False, url, "", "없는 페이지")
+
+    async def search(tag):
+        calls["search"] += 1
+        return search_result or _ok({"text": "", "sources": []})
+
+    out = _run(identify(b"img", "image/jpeg", read_tag=_tag_reader(TAG_1993), search=search,
+                        render_page=render_page, time_left=lambda: 40, malls=(MUSINSA,)))
+    return out, calls
+
+
+def test_search_query_prefers_code_alone():
+    assert search_query(TAG_1993) == "93251TTL1202"
+    assert search_query({"brand": "NIKE", "product_name": "에어 포스 1"}) == "NIKE 에어 포스 1"
+    assert search_query({"brand": "NIKE"}) is None
+
+
+def test_product_links_are_collected_in_order_without_duplicates():
+    html = '<a href="/products/5551111">a</a><a href="https://www.musinsa.com/products/5552222">b</a>' \
+           '<a href="/products/5551111">dup</a><a href="/products/123">짧은 번호</a>'
+    assert MUSINSA.product_urls_in(html, 3) == [P1, P2]
+
+
+def test_found_on_musinsa_search_skips_google_search():
+    search_page = PageView(True, SEARCH_URL, "검색 결과", html=f'<a href="/products/5551111"></a><a href="{P2}"></a>')
+    pages = {SEARCH_URL: search_page,
+             P1: PageView(True, P1, "다른 상품 99251XXX0001"),
+             P2: PageView(True, P2, "1993STUDIO 티셔츠 품번 93251TTL1202 29,900원")}
+    out, calls = _mall_run(pages)
+    assert out.status == "found" and out.match["url"] == P2 and out.match["source"] == "mall"
+    assert out.match["verified_by"] == "product_code" and out.match["tag_price_seen"] is True
+    assert calls["search"] == 0  # 구글 검색(유료 한도)을 안 썼다
+    assert calls["render"] == [SEARCH_URL, P1, P2]
+
+
+def test_falls_back_to_second_search_url_then_google_when_not_on_musinsa():
+    second = MUSINSA.search_urls_for("93251TTL1202")[1]
+    pages = {SEARCH_URL: PageView(True, SEARCH_URL, "검색 결과 없음", html="<div>없어요</div>"),
+             second: PageView(True, second, "검색 결과 없음", html="")}
+    official = "https://www.1993studio.com/product/detail.html?product_no=77"
+    pages[official] = PageView(True, official, "93251TTL1202 화이트")
+    out, calls = _mall_run(pages, search_result=_ok({"text": f"OFFICIAL_DOMAIN: 1993studio.com\nURL: {official}",
+                                                     "sources": []}))
+    assert calls["render"][:2] == [SEARCH_URL, second]
+    assert calls["search"] == 1
+    assert out.status == "found" and out.match["source"] == "official"
+
+
+def test_musinsa_pages_without_code_then_google_failure_reports_checked_pages():
+    pages = {SEARCH_URL: PageView(True, SEARCH_URL, "", html=f'<a href="{P1}"></a>'),
+             P1: PageView(True, P1, "비슷한 다른 상품")}
+    out, calls = _mall_run(pages, search_result=ProviderResult("s", "m", False, None, 1, "429"))
+    assert out.status == "not_found"
+    assert out.checked == [{"url": P1, "source": "mall", "verified": False, "reason": None}]
+    assert calls["search"] == 1
+
+
+def test_blocked_musinsa_search_goes_straight_to_google_and_keeps_time_for_it():
+    clock = {"left": 18.0}
+    calls = {"render": [], "search": 0}
+
+    async def render_page(url):
+        calls["render"].append(url)
+        clock["left"] -= 7  # 느리고 막힘
+        return PageView(False, url, "", "시간 초과")
+
+    async def search(tag):
+        calls["search"] += 1
+        return _ok({"text": "", "sources": []})
+
+    _run(identify(b"img", "image/jpeg", read_tag=_tag_reader(TAG_1993), search=search,
+                  render_page=render_page, time_left=lambda: clock["left"], malls=(MUSINSA,)))
+    assert calls["render"] == [SEARCH_URL]  # 두 번째 검색 주소는 시도하지 않음
+    assert calls["search"] == 1
+
+
+def test_mall_phase_is_skipped_when_only_google_reserve_is_left():
+    calls = {"render": [], "search": 0}
+
+    async def render_page(url):
+        calls["render"].append(url)
+        return PageView(False, url, "", "x")
+
+    async def search(tag):
+        calls["search"] += 1
+        return _ok({"text": "", "sources": []})
+
+    _run(identify(b"img", "image/jpeg", read_tag=_tag_reader(TAG_1993), search=search,
+                  render_page=render_page, time_left=lambda: 14.0, malls=(MUSINSA,)))
+    assert calls["render"] == []  # 14초 - 구글 몫 10초 < 6초 → 쇼핑몰 검색 생략
+    assert calls["search"] == 1

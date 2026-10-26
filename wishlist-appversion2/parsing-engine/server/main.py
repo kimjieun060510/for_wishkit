@@ -185,7 +185,8 @@ async def _render_for_identify(url: str, budget_s: float) -> PageView:
         r = await asyncio.wait_for(_guarded(), timeout=budget_s)
     except TimeoutError:
         return PageView(ok=False, final_url=url, raw_text="", error="시간 초과")
-    return PageView(ok=r.ok, final_url=r.final_url or url, raw_text=r.raw_text, error=r.error)
+    return PageView(ok=r.ok, final_url=r.final_url or url, raw_text=r.raw_text, error=r.error,
+                    html=r.cleaned_html)
 
 
 def _decode_image(image_base64: str) -> bytes:
