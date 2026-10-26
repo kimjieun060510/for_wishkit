@@ -21,6 +21,7 @@ test_tag_identify.py에서 가짜로 바꿔 끼워 테스트한다. 실제 연�
 """
 from __future__ import annotations
 
+import logging
 import re
 import urllib.parse
 from collections.abc import Awaitable, Callable
@@ -36,6 +37,8 @@ from tag_codes import (
     has_code,
     normalize_code,
 )
+
+logger = logging.getLogger("extract-server")
 
 # ── 1. 태그 읽기 ────────────────────────────────────────────
 
@@ -353,6 +356,21 @@ class IdentifyOutcome:
         }
 
 
+def _not_found_note(tag: dict, checked: list[dict]) -> str:
+    """못 찾은 이유를 사용자에게 보여 줄 한 줄로. 자세한 내용은 로그(main.py identify_tag)에 남는다."""
+    if not checked:
+        return "검색 결과에서 쇼핑몰 상품 페이지를 찾지 못했어요"
+    opened = [c for c in checked if c["verified"] is not None]
+    if opened:
+        code = tag.get("product_code") or "품번"
+        return f"후보 {len(opened)}곳을 열어 봤지만 {code}이(가) 적힌 페이지가 없었어요"
+    if all(c["reason"] in ("시간 부족", "시간 초과") for c in checked):
+        return "시간이 모자라 후보 페이지를 확인하지 못했어요. 다시 시도해 주세요"
+    if all(c["source"] == "other" for c in checked):
+        return "검색 결과가 쇼핑몰 상품 페이지가 아니었어요"
+    return "후보 페이지가 열리지 않았어요(차단 또는 시간 초과)"
+
+
 def _has_search_key(tag: dict) -> bool:
     return has_code(tag) or bool(
         (tag.get("brand") or "").strip() and (tag.get("product_name") or "").strip()
@@ -405,7 +423,8 @@ async def identify(
 
     search_res = await search(tag)
     if not search_res.ok or not search_res.data:
-        return IdentifyOutcome("not_found", tag, note=f"검색 실패: {search_res.error}")
+        logger.warning("[identify] 검색 실패: %s", search_res.error)
+        return IdentifyOutcome("not_found", tag, note="상품 검색에 실패했어요. 잠시 후 다시 시도해 주세요")
     official, candidates = parse_search_output(
         search_res.data.get("text", ""), search_res.data.get("sources", [])
     )
@@ -442,5 +461,5 @@ async def identify(
 
     if best is None:
         return IdentifyOutcome("not_found", tag, official_domain=official, checked=checked,
-                               note="품번이 확인된 상품 페이지를 찾지 못했어요" if candidates else "검색 결과가 없어요")
+                               note=_not_found_note(tag, checked))
     return IdentifyOutcome("found", tag, official_domain=official, match=best[1], checked=checked)

@@ -210,6 +210,15 @@ async def identify_tag(req: IdentifyTagRequest):
     def time_left() -> float:
         return config.IDENTIFY_TIMEOUT_S - (now_ms() - started) / 1000
 
+    stages: dict[str, int] = {}  # 단계별 걸린 시간(ms) — 못 찾았을 때 어디서 시간을 썼는지 로그로 본다
+
+    async def timed(name: str, coro):
+        t = now_ms()
+        try:
+            return await coro
+        finally:
+            stages[name] = stages.get(name, 0) + now_ms() - t
+
     async def gemini_once(fn, *args) -> ProviderResult:
         # AppSync 30초 한도 안에서 끝나야 하므로 429 재시도는 1번만, 그리고 남은 시간 안에 끝날
         # 때만 기다린다(retryDelay가 더 길면 바로 실패 → 태그 결과라도 not_found로 돌려줌).
@@ -221,9 +230,9 @@ async def identify_tag(req: IdentifyTagRequest):
         outcome = await asyncio.wait_for(
             identify(
                 image, req.mime_type,
-                read_tag=lambda img, mime: gemini_once(call_gemini_tag, img, mime),
-                search=lambda tag: gemini_once(call_gemini_search, tag),
-                render_page=lambda url: _render_for_identify(url, time_left() - 1.0),
+                read_tag=lambda img, mime: timed("read_tag", gemini_once(call_gemini_tag, img, mime)),
+                search=lambda tag: timed("search", gemini_once(call_gemini_search, tag)),
+                render_page=lambda url: timed("render", _render_for_identify(url, time_left() - 1.0)),
                 time_left=time_left,
             ),
             timeout=config.IDENTIFY_TIMEOUT_S,
@@ -236,7 +245,15 @@ async def identify_tag(req: IdentifyTagRequest):
         logger.exception("identify-tag 알 수 없는 오류")
         raise HTTPException(500, f"{type(exc).__name__}: {exc}") from exc
 
-    return {**outcome.to_dict(), "metrics": {"total_elapsed_ms": now_ms() - started}}
+    total_ms = now_ms() - started
+    # 한 줄 요약 로그(사진은 남기지 않음): 무엇을 읽고, 어디를 열어 봤고, 왜 떨어졌는지.
+    logger.info(
+        "[identify] %s (%dms, 단계 %s) brand=%r code=%r other=%r official=%r note=%r checked=%s",
+        outcome.status, total_ms, stages, outcome.tag.get("brand"), outcome.tag.get("product_code"),
+        outcome.tag.get("other_codes"), outcome.official_domain, outcome.note,
+        [(c["url"], c["source"], c["verified"], c["reason"]) for c in outcome.checked],
+    )
+    return {**outcome.to_dict(), "metrics": {"total_elapsed_ms": total_ms, "stages_ms": stages}}
 
 
 @app.get("/healthz")

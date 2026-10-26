@@ -233,6 +233,9 @@ class _ShareIntakeScreenState extends State<ShareIntakeScreen> {
         }
       case TagIdentifyStatus.notFound:
         lines.add('태그는 읽었지만 판매 페이지를 찾지 못했어요. 이름과 가격을 직접 입력해 주세요');
+        // 서버가 알려 준 이유(예: 시간이 모자람, 품번이 적힌 페이지가 없음) — 다시 시도할지 판단하게.
+        final note = r.note?.trim();
+        if (note != null && note.isNotEmpty) lines.add('이유: $note');
       case TagIdentifyStatus.notATag:
         break;
     }
