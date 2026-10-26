@@ -767,7 +767,8 @@ class TagIdentifyResult {
   bool get foundOnOfficialSite => matchSource == 'official';
 
   /// 품번·바코드 없이 이름만으로 찾은 경우 — 사용자가 같은 상품인지 확인해야 한다.
-  bool get needsUserCheck => verifiedBy == 'name';
+  /// 품번이 페이지에서 확인되지 않은 찾기(이름으로만, 또는 쇼핑몰 품번 검색 결과) — 사용자에게 확인을 묻는다.
+  bool get needsUserCheck => verifiedBy == 'name' || verifiedBy == 'search_match';
 
   /// 태그 정보로 만든 상품명 후보. 예: "NIKE 에어 포스 1 '07 (WHITE)"
   String get suggestedName {

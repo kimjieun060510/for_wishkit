@@ -335,7 +335,11 @@ class IdentifyError(Exception):
 
 # 코드 근거의 세기. 같은 사이트 종류 안에서만 비교한다 — 공식몰의 기본 번호 일치가 쇼핑몰의 품번 전체
 # 일치보다 앞선다(같은 상품이고 색상은 공식몰 페이지에서 고르면 된다). 이름 일치는 항상 맨 뒤.
-_CODE_STRENGTH = {"product_code": 0, "barcode": 0, "product_code_base": 1, "name": 2}
+_CODE_STRENGTH = {"product_code": 0, "barcode": 0, "product_code_base": 1, "search_match": 2, "name": 2}
+# 근거의 단계: 0 = 품번·바코드로 확인, 1 = 쇼핑몰 품번 검색 결과(품번은 페이지에 없음), 2 = 이름으로만 확인.
+_EVIDENCE_TIER = {"product_code": 0, "barcode": 0, "product_code_base": 0, "search_match": 1, "name": 2}
+# 쇼핑몰을 품번으로 검색했을 때 결과가 이 개수 이하면 "그 품번의 상품"으로 볼 만하다(많으면 비슷한 상품이 섞임).
+SEARCH_MATCH_MAX_RESULTS = 2
 _SOURCE_RANK = {"official": 0, "mall": 1}
 
 
@@ -437,7 +441,9 @@ async def identify(
     mall_time_left = lambda: time_left() - GOOGLE_RESERVE_S
     for mall in MALL_SEARCHES if malls is None else malls:
         urls = await _mall_product_urls(mall, tag, render_page, mall_time_left, min_seconds_per_render)
-        await checker.check_all([Candidate(u, mall.domain, "mall") for u in urls], official=None)
+        by_code = bool(tag.get("product_code")) and 0 < len(urls) <= SEARCH_MATCH_MAX_RESULTS
+        await checker.check_all([Candidate(u, mall.domain, "mall") for u in urls], official=None,
+                                search_hit=by_code)
         if checker.code_verified:
             return checker.outcome(official=None)
     checker.reserve_s = 0.0
@@ -448,8 +454,10 @@ async def identify(
         logger.warning("[identify] 검색 실패: %s", search_res.error)
         if checker.best is not None:  # 쇼핑몰에서 이름으로라도 찾은 게 있으면 그걸 돌려준다
             return checker.outcome(official=None)
-        return IdentifyOutcome("not_found", tag, checked=checker.checked,
-                               note="상품 검색에 실패했어요. 잠시 후 다시 시도해 주세요")
+        # 쇼핑몰에서 열어 본 후보가 있으면 그게 왜 안 됐는지를, 없으면 검색 실패를 알려 준다
+        note = (_not_found_note(tag, checker.checked) if checker.checked
+                else "상품 검색에 실패했어요. 잠시 후 다시 시도해 주세요")
+        return IdentifyOutcome("not_found", tag, checked=checker.checked, note=note)
     official, candidates = parse_search_output(
         search_res.data.get("text", ""), search_res.data.get("sources", [])
     )
@@ -480,6 +488,14 @@ async def _mall_product_urls(
     return []
 
 
+def _brand_or_price_on_page(tag: dict, raw_text: str) -> bool:
+    """페이지에 태그의 브랜드(영문 표기 그대로)나 태그 가격이 보이는지."""
+    brand = normalize_code(tag.get("brand"))
+    if len(brand) >= 3 and brand in normalize_code(raw_text):
+        return True
+    return price_seen(tag, raw_text) is True
+
+
 class _Checker:
     """후보 페이지를 열어 품번(또는 이름)이 실제로 있는지 확인하고, 가장 좋은 일치를 기억한다.
     쇼핑몰 직접 검색 후보와 구글 검색 후보가 같은 규칙으로 확인된다."""
@@ -493,7 +509,7 @@ class _Checker:
         self.seen: set[str] = set()
         self.reserve_s = 0.0  # 이 단계에서 남겨 둘 시간(쇼핑몰 단계 → 구글 검색 몫)
         # (순위, match) — 순위가 작을수록 좋다:
-        # (이름으로만 확인, 공식몰 아님, 코드 근거 세기, 태그 가격이 페이지에 없음)
+        # (근거 단계, 공식몰 아님, 코드 근거 세기, 태그 가격이 페이지에 없음)
         self.best: tuple[tuple[int, int, int, int], dict] | None = None
 
     @property
@@ -502,7 +518,9 @@ class _Checker:
         return self.best is not None and self.best[0][0] == 0
 
     async def check_all(self, candidates: list[Candidate], *, official: str | None,
-                        stop_on_official: bool = False) -> None:
+                        stop_on_official: bool = False, search_hit: bool = False) -> None:
+        """search_hit: 쇼핑몰을 품번으로 검색해서 결과가 몇 개 안 나온 후보들. 페이지에 품번이 없어도
+        브랜드나 태그 가격이 보이면 '검색 일치'(search_match)로 받아 준다 — 앱이 사용자에게 확인을 묻는다."""
         for cand in candidates:
             self.seen.add(cand.url)
             if self._time_left() - self.reserve_s < self._min_s:
@@ -518,11 +536,13 @@ class _Checker:
                 self.checked.append(_checked(page.final_url, source, None, "쇼핑몰이 아닌 페이지"))
                 continue
             verified_by = page_matches(self.tag, page.raw_text, page.final_url)
+            if verified_by is None and search_hit and _brand_or_price_on_page(self.tag, page.raw_text):
+                verified_by = "search_match"
             self.checked.append(_checked(page.final_url, source, verified_by is not None, verified_by))
             if verified_by is None:
                 continue
             price_ok = price_seen(self.tag, page.raw_text)
-            rank = (int(verified_by == "name"), _SOURCE_RANK[source], _CODE_STRENGTH[verified_by],
+            rank = (_EVIDENCE_TIER[verified_by], _SOURCE_RANK[source], _CODE_STRENGTH[verified_by],
                     0 if price_ok is not False else 1)
             if self.best is None or rank < self.best[0]:
                 self.best = (rank, {"url": page.final_url, "host": final_host, "source": source,

@@ -228,7 +228,9 @@ class _ShareIntakeScreenState extends State<ShareIntakeScreen> {
               ? '브랜드 공식몰(${r.matchHost})에서 찾았어요'
               : '공식몰에서 못 찾아 ${r.matchHost}에서 찾았어요',
         );
-        if (r.needsUserCheck) {
+        if (r.verifiedBy == 'search_match') {
+          lines.add('쇼핑몰에서 품번으로 검색해 찾은 상품이에요. 같은 상품인지 꼭 확인해 주세요');
+        } else if (r.needsUserCheck) {
           lines.add('품번 없이 이름으로 찾았어요. 같은 상품인지 꼭 확인해 주세요');
         }
       case TagIdentifyStatus.notFound:

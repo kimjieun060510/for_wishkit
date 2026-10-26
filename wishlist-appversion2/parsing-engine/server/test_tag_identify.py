@@ -377,3 +377,49 @@ def test_mall_phase_is_skipped_when_only_google_reserve_is_left():
                   render_page=render_page, time_left=lambda: 14.0, malls=(MUSINSA,)))
     assert calls["render"] == []  # 14초 - 구글 몫 10초 < 6초 → 쇼핑몰 검색 생략
     assert calls["search"] == 1
+
+
+# ── 무신사 품번 검색 결과가 1~2개면, 페이지에 품번이 없어도 브랜드·가격으로 "검색 일치" (2026-10-26) ──
+
+def _one_result(product_text: str, n_results: int = 1):
+    links = "".join(f'<a href="/products/{5046318 + i}"></a>' for i in range(n_results))
+    p = "https://www.musinsa.com/products/5046318"
+    pages = {SEARCH_URL: PageView(True, SEARCH_URL, "", html=links), p: PageView(True, p, product_text)}
+    for i in range(1, n_results):
+        q = f"https://www.musinsa.com/products/{5046318 + i}"
+        pages[q] = PageView(True, q, "다른 상품")
+    return pages, p
+
+
+def test_single_musinsa_code_result_with_brand_is_a_search_match_even_after_google_429():
+    pages, p = _one_result("1993STUDIO 오버핏 반팔 티셔츠 화이트 정가 29,900원")
+    out, calls = _mall_run(pages, search_result=ProviderResult("s", "m", False, None, 1, "429"))
+    assert out.status == "found" and out.match["url"] == p
+    assert out.match["verified_by"] == "search_match" and out.match["tag_price_seen"] is True
+    assert calls["search"] == 1  # 품번 확인이 아니라서 구글 검색도 시도는 한다(유료 키면 더 확실한 페이지를 찾을 수 있게)
+
+
+def test_single_result_with_only_tag_price_is_also_a_search_match():
+    pages, _ = _one_result("오버핏 반팔 티셔츠 29,900원")
+    out, _ = _mall_run(pages, search_result=ProviderResult("s", "m", False, None, 1, "429"))
+    assert out.status == "found" and out.match["verified_by"] == "search_match"
+
+
+def test_single_result_without_brand_or_price_is_not_accepted():
+    pages, _ = _one_result("전혀 다른 브랜드 상품 15,000원")
+    out, _ = _mall_run(pages, search_result=ProviderResult("s", "m", False, None, 1, "429"))
+    assert out.status == "not_found"
+
+
+def test_many_results_are_not_trusted_without_the_code_on_the_page():
+    pages, _ = _one_result("1993STUDIO 반팔 29,900원", n_results=3)
+    out, _ = _mall_run(pages, search_result=ProviderResult("s", "m", False, None, 1, "429"))
+    assert out.status == "not_found"
+
+
+def test_code_verified_google_page_beats_musinsa_search_match():
+    pages, _ = _one_result("1993STUDIO 반팔 29,900원")
+    official = "https://www.1993studio.com/product/77"
+    pages[official] = PageView(True, official, "STYLE 93251TTL1202")
+    out, _ = _mall_run(pages, search_result=_ok({"text": f"OFFICIAL_DOMAIN: 1993studio.com\nURL: {official}", "sources": []}))
+    assert out.match["url"] == official and out.match["verified_by"] == "product_code"
